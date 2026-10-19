@@ -14,8 +14,8 @@ Trove is a RAG pipeline (retrieval-augmented generation): embeddings, semantic r
 - Searches by words (FTS4) and by meaning (cosine similarity over embeddings), fused with Reciprocal Rank Fusion.
 - Answers questions in a chat. Each answer cites the source posts and shows them in full.
 - Shows charts that filter each other: activity, categories, accounts, tickers, and hashtags.
-- Runs on your machine, or on your own Cloudflare account with a login gate and a phone-ready app.
-- Serves the collection to other agents through a remote MCP server.
+- Runs on your machine by default, with no Cloudflare account.
+- Optional: deploys to your own Cloudflare account for phone access and a remote MCP server for other agents.
 
 ## How it works
 
@@ -25,13 +25,25 @@ flowchart LR
   EXT -->|HTML export| EXP[exports/*.html]
   EXP --> CLS[Classifier<br/>reclassify_canonical.py]
   CLS -->|categorized_tweets.json| ENR[Enrichment<br/>enrich.py]
-  ENR -->|enriched_tweets.json| DB[(Browser SQLite<br/>sql.js + IndexedDB)]
-  DB --> APP[Web app<br/>search, dashboard, chat]
-  ENR -->|./trove deploy| R2[(Your Cloudflare R2)]
-  R2 --> APP
-  ENR -->|./trove mcp-push| D1[(Your Cloudflare D1)]
-  D1 --> MCP[MCP server<br/>/api/mcp]
+  ENR -->|enriched_tweets.json| WS[Local data server<br/>wiki_server.py]
+  WS --> DB[(Browser SQLite<br/>sql.js + IndexedDB)]
+  DB --> APP[Web app on your machine<br/>search, dashboard, chat]
+
+  subgraph CLOUD [Optional: self-host on your own Cloudflare account]
+    R2[(R2 bucket)] --> PAGES[Same web app on Pages<br/>login gate, phone access]
+    D1[(D1 database)] --> MCP[MCP server<br/>/api/mcp]
+  end
+
+  ENR -.->|./trove deploy| R2
+  ENR -.->|./trove mcp-push| D1
+  style CLOUD stroke-dasharray: 5 5
 ```
+
+By default, everything runs on your machine at `http://127.0.0.1:5174`.
+You need API keys for the models, but no Cloudflare account.
+The dashed box is optional.
+Use it only if you want the app on your phone or an MCP server for other agents.
+It deploys to your own Cloudflare account, never to anyone else's.
 
 One chat turn works like this.
 
@@ -160,7 +172,8 @@ Run `./trove help` for the list.
 
 ## Tech stack and models
 
-React 18, Vite 6, strict TypeScript, Tailwind, Zustand, TanStack Query, sql.js, Recharts, and Cloudflare Pages, R2, D1, and Access.
+React 18, Vite 6, strict TypeScript, Tailwind, Zustand, TanStack Query, sql.js, and Recharts.
+The optional cloud mode uses Cloudflare Pages, R2, D1, and Access.
 The pipeline uses Python with httpx, trafilatura, and numpy.
 
 | Use | Model | Where |
@@ -192,7 +205,7 @@ Never delete the `.*_cache.json` files.
 | [Getting started](docs/getting-started.md) | From clone to a working app. |
 | [Workflow](docs/workflow.md) | Daily use, commands, and fixes. |
 | [Architecture](docs/architecture.md) | Parts, data flow, and models. |
-| [Deployment](docs/deployment.md) | Self-host on your Cloudflare account. |
+| [Deployment](docs/deployment.md) | Optional: self-host on your own Cloudflare account. |
 | [MCP server](docs/mcp-server.md) | Let other agents query your collection. |
 | [Wiki schema](docs/wiki-schema.md) | Page format for the optional wiki. |
 | [Web app](webapp/README.md) | Web app code map. |
@@ -205,7 +218,8 @@ Never delete the `.*_cache.json` files.
 Trove is for personal archiving of content that you can already see.
 X's terms restrict automated collection.
 You are responsible for complying with those terms and with the law.
-Collected data stays on your machine and in your own Cloudflare account.
+Collected data stays on your machine.
+If you use the optional cloud mode, it also goes to your own Cloudflare account.
 Do not redistribute other people's posts.
 Never commit `exports/` or `.env` to git.
 

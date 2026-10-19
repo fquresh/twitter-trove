@@ -15,16 +15,25 @@ The system has six steps: collect, classify, enrich, store, search, and chat.
 ```mermaid
 flowchart LR
   X[X timeline] --> EXT[Chrome extension<br/>x-collector/]
-  EXT -->|HTML export| RAW[exports/*.html]
-  RAW --> CLS[Classifier<br/>reclassify_canonical.py]
+  EXT -->|HTML export| EXP[exports/*.html]
+  EXP --> CLS[Classifier<br/>reclassify_canonical.py]
   CLS -->|categorized_tweets.json| ENR[Enrichment<br/>enrich.py]
-  ENR -->|enriched_tweets.json| LOCAL[(SQLite in browser<br/>sql.js + IndexedDB)]
-  ENR -->|./trove deploy| R2[(Cloudflare R2)]
-  R2 --> LOCAL
-  LOCAL --> APP[Web app<br/>search + dashboard + chat]
-  ENR -->|./trove mcp-push| D1[(Cloudflare D1)]
-  D1 --> MCP[Remote MCP server<br/>/api/mcp]
+  ENR -->|enriched_tweets.json| WS[Local data server<br/>wiki_server.py]
+  WS --> DB[(Browser SQLite<br/>sql.js + IndexedDB)]
+  DB --> APP[Web app on your machine<br/>search, dashboard, chat]
+
+  subgraph CLOUD [Optional: self-host on your own Cloudflare account]
+    R2[(R2 bucket)] --> PAGES[Same web app on Pages<br/>login gate, phone access]
+    D1[(D1 database)] --> MCP[MCP server<br/>/api/mcp]
+  end
+
+  ENR -.->|./trove deploy| R2
+  ENR -.->|./trove mcp-push| D1
+  style CLOUD stroke-dasharray: 5 5
 ```
+
+The local path is the default.
+The cloud path is optional. See [Local and cloud modes](#local-and-cloud-modes).
 
 ## The parts
 
@@ -139,6 +148,8 @@ The Sources grid shows each cited post in full, with a link to open it on X.
 ## Local and cloud modes
 
 The same app runs in two places.
+Local mode is the default and needs no Cloudflare account.
+Cloud mode is optional and uses your own Cloudflare account.
 
 | | Local | Cloud |
 |---|---|---|
