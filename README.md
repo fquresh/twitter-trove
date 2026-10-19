@@ -1,21 +1,36 @@
 # Trove
 
-Collect X posts from any timeline, search them by meaning, and chat with them.
-Trove is a RAG pipeline (retrieval-augmented generation): embeddings, semantic retrieval, and an LLM that answers with citations.
+Save X posts from any timeline, then search them by meaning and ask questions about them.
+Every answer cites the posts it came from.
+
+Trove runs on your computer.
+Your posts go only to the model providers you choose, with your own API keys.
 
 ![Trove dashboard](docs/media/hero.png)
 
+[Try the demo](#try-it-without-your-own-data) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Self-host on Cloudflare (optional)](docs/deployment.md)
+
 ## What it does
 
-- Collects posts from any X timeline with a Chrome extension. Likes, bookmarks, profiles, lists, searches, and more.
-- Classifies each post into a fixed taxonomy. Posts with images use the image content.
-- Adds the text of linked pages, image descriptions, and Voyage embeddings.
-- Stores the whole collection in your browser (SQLite through sql.js, saved to IndexedDB).
-- Searches by words (FTS4) and by meaning (cosine similarity over embeddings), fused with Reciprocal Rank Fusion.
-- Answers questions in a chat. Each answer cites the source posts and shows them in full.
-- Shows charts that filter each other: activity, categories, accounts, tickers, and hashtags.
-- Runs on your machine by default, with no Cloudflare account.
-- Optional: deploys to your own Cloudflare account for phone access and a remote MCP server for other agents.
+- Collects posts from any X timeline: likes, bookmarks, profiles, lists, and searches.
+- Sorts each post into categories, and reads its images and linked pages.
+- Searches by exact words and by meaning.
+- Answers questions in a chat, with citations to the source posts.
+- Shows charts that filter each other: activity, categories, and accounts.
+
+Under the hood, Trove is a RAG pipeline: embeddings, semantic retrieval, and an LLM that answers with citations.
+
+## Where it runs
+
+| | Local (default) | Cloud (optional) |
+|---|---|---|
+| Runs on | Your computer, at `http://127.0.0.1:5174` | Your own Cloudflare account |
+| You need | Python 3, Node.js, Chrome or Brave, and model API keys | The local setup and a free Cloudflare account |
+| Adds | - | Phone access behind a login, sync across devices, and an MCP server for other agents |
+| Start with | `./trove go` | `./trove deploy`, after the [deployment guide](docs/deployment.md) |
+
+Most people need only the local mode.
+Your data never goes to the project author or to a shared server.
 
 ## How it works
 
