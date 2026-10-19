@@ -1,0 +1,49 @@
+{
+  "name": "trove-webapp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "seed": "tsx scripts/seed.ts",
+    "postinstall": "node -e \"const fs=require('node:fs');for(const f of ['sql-wasm.wasm','sql-wasm-browser.wasm']){fs.copyFileSync('node_modules/sql.js/dist/'+f,'public/'+f)}\""
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.60.5",
+    "idb": "^8.0.0",
+    "jose": "^5.9.6",
+    "react": "^18.3.1",
+    "react-day-picker": "^8.10.2",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.1.0",
+    "react-router-dom": "^6.28.0",
+    "recharts": "^2.13.3",
+    "remark-gfm": "^4.0.1",
+    "sql.js": "^1.11.0",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250115.0",
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/sql.js": "^1.4.9",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "jsdom": "^25.0.1",
+    "miniflare": "^4.20260708.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8"
+  }
+}

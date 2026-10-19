@@ -1,0 +1,45 @@
+# Template for the Cloudflare Pages config. Copy it and fill in your own values:
+#   cp wrangler.example.toml wrangler.toml
+# wrangler.toml is gitignored, so your account's names and ids stay out of git.
+# Use the same names in the root .env: TROVE_PAGES_PROJECT, TROVE_R2_BUCKET and
+# TROVE_D1_DB. The ./trove deploy and ./trove mcp-push commands read them there.
+
+# Your Cloudflare Pages project name (same value as TROVE_PAGES_PROJECT).
+name = "<your-pages-project>"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Pages Functions live at webapp/functions/. Wrangler auto-discovers them when
+# deploying with `wrangler pages deploy`. The build output (the SPA bundle) is
+# at webapp/dist. (Top-level keys must precede the [[...]] table sections
+# below, or TOML folds them into the last table.)
+pages_build_output_dir = "dist"
+
+# R2 binding - accessible inside Pages Functions as `env.DATA_BUCKET`.
+# Create the bucket with `wrangler r2 bucket create <your-r2-bucket>`
+# (same value as TROVE_R2_BUCKET).
+[[r2_buckets]]
+binding = "DATA_BUCKET"
+bucket_name = "<your-r2-bucket>"
+
+# D1 binding for cross-device sync (/api/sync) and the MCP index (/api/mcp),
+# accessible as `env.DB`. Create it with `wrangler d1 create <your-d1-database>`
+# (same value as TROVE_D1_DB) and paste the database_id it prints. The sync
+# table self-provisions on the first /api/sync request; `./trove mcp-push`
+# creates and fills the MCP tables.
+[[d1_databases]]
+binding = "DB"
+database_name = "<your-d1-database>"
+database_id = "<your-d1-database-id>"
+
+# Cloudflare Access config is read by functions/api/_auth.ts at request time.
+# CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD, and ALLOWED_EMAIL are stored as Pages
+# secrets, not here, so your email and Access identifiers stay out of git.
+# Set them once per project:
+#   npx wrangler pages secret put ALLOWED_EMAIL --project-name <your-pages-project>
+# Secrets persist across deploys. If any is missing, every /api/* call fails
+# closed with a 500 server_misconfigured error.
+#
+# API keys (DEEPSEEK_API_KEY, VOYAGE_API_KEY) are Pages secrets too. Never put a
+# key in this file. ALLOW_UNAUTHENTICATED_DEV is the local-dev auth bypass and
+# must never be set in production.

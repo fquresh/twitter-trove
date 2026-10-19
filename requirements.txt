@@ -1,0 +1,10 @@
+anthropic
+beautifulsoup4
+boto3
+flask
+flask-cors
+httpx
+lxml
+numpy
+trafilatura
+voyageai

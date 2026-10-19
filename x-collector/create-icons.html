@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Generate Extension Icons</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #1da1f2;
+      margin-bottom: 10px;
+    }
+    p {
+      color: #666;
+      margin-bottom: 20px;
+    }
+    button {
+      background: #1da1f2;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover {
+      background: #1a91da;
+    }
+    .preview {
+      margin-top: 30px;
+      display: flex;
+      gap: 20px;
+      align-items: flex-end;
+    }
+    .preview-item {
+      text-align: center;
+    }
+    .preview-item span {
+      display: block;
+      margin-top: 8px;
+      font-size: 12px;
+      color: #666;
+    }
+    canvas {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    .success {
+      color: #17bf63;
+      margin-top: 20px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Generate Extension Icons</h1>
+    <p>Click the button below to download all three required icon sizes for the X Collector extension.</p>
+
+    <button onclick="downloadAllIcons()">Download All Icons</button>
+
+    <div class="preview">
+      <div class="preview-item">
+        <canvas id="icon16" width="16" height="16"></canvas>
+        <span>16x16</span>
+      </div>
+      <div class="preview-item">
+        <canvas id="icon48" width="48" height="48"></canvas>
+        <span>48x48</span>
+      </div>
+      <div class="preview-item">
+        <canvas id="icon128" width="128" height="128"></canvas>
+        <span>128x128</span>
+      </div>
+    </div>
+
+    <div id="message"></div>
+  </div>
+
+  <script>
+    function drawIcon(canvas, size) {
+      const ctx = canvas.getContext('2d');
+
+      // Background - X blue
+      ctx.fillStyle = '#1da1f2';
+      ctx.fillRect(0, 0, size, size);
+
+      // Draw a simple heart icon
+      ctx.fillStyle = '#ffffff';
+
+      // Scale based on size
+      const scale = size / 128;
+      const centerX = size / 2;
+      const centerY = size / 2;
+
+      // Draw heart
+      ctx.beginPath();
+      const topCurveHeight = size * 0.3;
+
+      ctx.moveTo(centerX, centerY + size * 0.15);
+
+      // Left half of heart
+      ctx.bezierCurveTo(
+        centerX, centerY - topCurveHeight / 2,
+        centerX - size / 2, centerY - topCurveHeight / 2,
+        centerX - size / 2, centerY
+      );
+
+      ctx.bezierCurveTo(
+        centerX - size / 2, centerY + size * 0.15,
+        centerX, centerY + size * 0.35,
+        centerX, centerY + size * 0.15
+      );
+
+      // Right half of heart
+      ctx.bezierCurveTo(
+        centerX, centerY + size * 0.35,
+        centerX + size / 2, centerY + size * 0.15,
+        centerX + size / 2, centerY
+      );
+
+      ctx.bezierCurveTo(
+        centerX + size / 2, centerY - topCurveHeight / 2,
+        centerX, centerY - topCurveHeight / 2,
+        centerX, centerY + size * 0.15
+      );
+
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Draw previews
+    drawIcon(document.getElementById('icon16'), 16);
+    drawIcon(document.getElementById('icon48'), 48);
+    drawIcon(document.getElementById('icon128'), 128);
+
+    function downloadIcon(canvasId, filename) {
+      const canvas = document.getElementById(canvasId);
+      canvas.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    }
+
+    function downloadAllIcons() {
+      downloadIcon('icon16', 'icon16.png');
+      setTimeout(() => downloadIcon('icon48', 'icon48.png'), 200);
+      setTimeout(() => downloadIcon('icon128', 'icon128.png'), 400);
+
+      document.getElementById('message').innerHTML =
+        '<div class="success">✓ All icons downloaded! Move them to the x-collector folder.</div>';
+    }
+  </script>
+</body>
+</html>

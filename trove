@@ -1,0 +1,1016 @@
+#!/usr/bin/env bash
+# trove - single-entry launcher.
+# Usage:
+#   ./trove go [--no-update]             one-shot: update → start → browser → push to R2
+#                                        (R2 push keeps the cloud/mobile app in sync;
+#                                         needs wrangler, else it's skipped with a note)
+#                                        --no-update skips the refresh + R2 push, just boots
+#   ./trove start                        boot dev server + wiki, open browser
+#   ./trove update [--dry] [--no-images] [--emergent]
+#                                        re-run classifier + enrichment incrementally
+#                                        default: canonical (Gemini Flash-Lite, fixed taxonomy)
+#                                        --no-images skips image descriptions
+#                                        --emergent: legacy Sonnet emergent taxonomy
+#   ./trove deploy [flags]               atomic cloud deploy: refresh data → build webapp
+#                                        → wrangler pages deploy (CODE) → push JSONs to R2
+#                                        (DATA). Code ships before data so the cloud never
+#                                        runs new data on a stale bundle. Needs wrangler.
+#                                          --no-update   skip the pipeline refresh
+#                                          --code-only   only build + deploy the app (no R2)
+#                                          --data-only   only push JSONs to R2 (no code deploy)
+#   ./trove mcp-push [--full]            rebuild the MCP index in D1 from the local JSONs + wiki
+#                                        (deploy runs this automatically; --full drops and reloads)
+#   ./trove set-key                      paste API keys interactively → .env
+#   ./trove wiki                         boot just the wiki server
+#   ./trove stop                         kill anything running on our ports
+#   ./trove status                       print what's running
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WEBAPP="$ROOT/webapp"
+WEB_PORT=5174
+WIKI_PORT=8765
+LOG_DIR="$ROOT/.trove-logs"
+ENV_FILE="$ROOT/.env"
+mkdir -p "$LOG_DIR"
+
+# Load .env if present.  Values are exported into the current shell so the
+# Python tools below see them without us having to forward each one.
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+VENV="$ROOT/.venv"
+
+SYS_PY=$(command -v python3 || command -v python || true)
+if [[ -z "$SYS_PY" ]]; then
+  echo "✗ python3 not found on PATH"; exit 1
+fi
+# If a project venv already exists, prefer it. Otherwise use the system python
+# until ensure_python_deps creates one and swaps PY.
+if [[ -x "$VENV/bin/python3" ]]; then
+  PY="$VENV/bin/python3"
+else
+  PY="$SYS_PY"
+fi
+
+ensure_python_deps() {
+  # Modern macOS Pythons (Homebrew, system) are PEP 668-protected and refuse
+  # `pip install` outside a virtualenv. So we use a project-local venv at
+  # .venv/ - created lazily on first run, reused thereafter.
+  if [[ ! -x "$VENV/bin/python3" ]]; then
+    echo "▸ first-run: creating venv at .venv/ …"
+    if ! "$SYS_PY" -m venv "$VENV" 2>/dev/null; then
+      echo "✗ failed to create venv with $SYS_PY"
+      echo "  try:  $SYS_PY -m venv $VENV"
+      exit 1
+    fi
+  fi
+  PY="$VENV/bin/python3"
+
+  local probe="import trafilatura, httpx, anthropic, bs4, lxml, flask, flask_cors, voyageai, numpy, boto3"
+  if ! "$PY" -c "$probe" 2>/dev/null; then
+    echo "▸ installing python deps into .venv from requirements.txt …"
+    "$PY" -m pip install --quiet --upgrade pip
+    if ! "$PY" -m pip install --quiet -r "$ROOT/requirements.txt"; then
+      echo "✗ pip install failed. try manually:"
+      echo "    $PY -m pip install -r requirements.txt"
+      exit 1
+    fi
+    if ! "$PY" -c "$probe" 2>/dev/null; then
+      echo "✗ deps still missing after pip install - see above for details"
+      exit 1
+    fi
+    echo "✓ deps installed in .venv"
+  fi
+}
+
+is_listening() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+kill_port() {
+  local port="$1"
+  if is_listening "$port"; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t | xargs -r kill -9 2>/dev/null || true
+  fi
+}
+
+# retry CMD [ARGS...] - run a command up to 3 times with increasing sleeps
+# (5s, then 15s) between attempts. Prints "↻ retrying…" on each retry so
+# transient network flakes (Pages upload, large R2 puts) are visible and
+# recoverable without re-running the whole deploy by hand.
+retry() {
+  local attempt=1 max=3
+  local delays=(5 15)
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" -ge "$max" ]]; then
+      return 1
+    fi
+    local delay="${delays[$((attempt - 1))]}"
+    echo "  ↻ retrying in ${delay}s (attempt $((attempt + 1))/$max)…"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
+# Print a one-line upgrade hint if wrangler is older than a known-good floor.
+# Does not auto-upgrade - just nudge. Floor chosen as the version that existed
+# when Pages upload flakes were observed (4.98.0); 4.107.1+ is available.
+maybe_hint_wrangler_upgrade() {
+  local ver raw major minor patch
+  raw="$(wrangler --version 2>/dev/null || true)"
+  # wrangler prints "wrangler 4.98.0" or just "4.98.0" depending on version.
+  ver="$(echo "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+  if [[ -z "$ver" ]]; then
+    return 0
+  fi
+  IFS=. read -r major minor patch <<< "$ver"
+  # Floor: 4.100.0 (anything below gets the hint).
+  if [[ "$major" -lt 4 ]] || { [[ "$major" -eq 4 ]] && [[ "$minor" -lt 100 ]]; }; then
+    echo "  ℹ wrangler $ver is older than the known-good floor (4.100+). Consider: npm i -g wrangler@latest"
+  fi
+}
+
+# Read the OAuth token wrangler login stored (never printed). Empty if missing.
+_wrangler_oauth_token() {
+  local cfg="${WRANGLER_CONFIG:-$HOME/Library/Preferences/.wrangler/config/default.toml}"
+  # Linux path fallback
+  if [[ ! -f "$cfg" ]]; then
+    cfg="${XDG_CONFIG_HOME:-$HOME/.config}/.wrangler/config/default.toml"
+  fi
+  if [[ ! -f "$cfg" ]]; then
+    return 0
+  fi
+  # shellcheck disable=SC2002
+  sed -n 's/^[[:space:]]*oauth_token[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$cfg" | head -1
+}
+
+# Cloudflare account id for the R2 REST API. Prefer env; else wrangler whoami.
+_cf_account_id() {
+  if [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+    echo "$CLOUDFLARE_ACCOUNT_ID"
+    return 0
+  fi
+  # Parse the first Account ID table cell from `wrangler whoami`.
+  wrangler whoami 2>/dev/null \
+    | grep -oE '[0-9a-f]{32}' \
+    | head -1
+}
+
+# True when R2 S3 API credentials are present (multipart-capable path).
+_r2_s3_ready() {
+  [[ -n "${R2_S3_ACCESS_KEY_ID:-}" && -n "${R2_S3_SECRET_ACCESS_KEY:-}" ]]
+}
+
+# S3 endpoint for R2. Prefer R2_S3_ENDPOINT; else derive from account id.
+_r2_s3_endpoint() {
+  if [[ -n "${R2_S3_ENDPOINT:-}" ]]; then
+    echo "$R2_S3_ENDPOINT"
+    return 0
+  fi
+  local account
+  account="$(_cf_account_id)"
+  if [[ -n "$account" ]]; then
+    echo "https://${account}.r2.cloudflarestorage.com"
+    return 0
+  fi
+  return 1
+}
+
+# Print the one-time setup hint for large R2 puts (S3 multipart tokens).
+_r2_s3_hint() {
+  echo "  ℹ large R2 puts need S3 API tokens (multipart)."
+  echo "    Mint an Object Read & Write token scoped to bucket ${TROVE_R2_BUCKET:-<your bucket>}, then:"
+  echo "      ./trove set-key   # paste R2_S3_ACCESS_KEY_ID / SECRET / ENDPOINT"
+  echo "    (or export them into .env). Requires aws CLI or boto3 in .venv."
+}
+
+# Ensure boto3 is available in the project venv for the S3 multipart path.
+_ensure_boto3() {
+  ensure_python_deps
+  if ! "$PY" -c "import boto3" 2>/dev/null; then
+    echo "    ▸ installing boto3 into .venv…"
+    if ! "$PY" -m pip install --quiet boto3; then
+      echo "    ✗ could not install boto3"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# r2_object_put_s3 BUCKET KEY FILE CONTENT_TYPE [CONTENT_ENCODING]
+# Multipart upload via S3-compatible R2 API. Prefers `aws s3 cp` when present;
+# otherwise scripts/r2_s3_put.py (boto3). Both store Content-Encoding so the
+# Pages /api/data proxy can re-emit it for transparent browser decompress.
+r2_object_put_s3() {
+  local bucket="$1" key="$2" file="$3" content_type="$4" content_encoding="${5:-}"
+  local endpoint
+  endpoint="$(_r2_s3_endpoint)" || {
+    echo "    ✗ R2_S3_ENDPOINT unset and could not derive from account id"
+    return 1
+  }
+
+  if command -v aws >/dev/null 2>&1; then
+    echo "    → aws s3 cp (multipart auto above 8 MB)…"
+    # AWS CLI maps AWS_* env; multiparts default threshold is 8 MB with
+    # per-part retries - exactly what this flaky network path needs.
+    local aws_args=(
+      s3 cp "$file" "s3://${bucket}/${key}"
+      --endpoint-url "$endpoint"
+      --region auto
+      --content-type "$content_type"
+    )
+    if [[ -n "$content_encoding" ]]; then
+      aws_args+=(--content-encoding "$content_encoding")
+    fi
+    AWS_ACCESS_KEY_ID="$R2_S3_ACCESS_KEY_ID" \
+    AWS_SECRET_ACCESS_KEY="$R2_S3_SECRET_ACCESS_KEY" \
+    AWS_DEFAULT_REGION=auto \
+    aws "${aws_args[@]}" && {
+      echo "    Upload complete. (aws s3 multipart)"
+      return 0
+    }
+    return 1
+  fi
+
+  # boto3 path (project .venv)
+  if ! _ensure_boto3; then
+    return 1
+  fi
+  if [[ -n "$content_encoding" ]]; then
+    R2_S3_ENDPOINT="$endpoint" \
+    R2_S3_ACCESS_KEY_ID="$R2_S3_ACCESS_KEY_ID" \
+    R2_S3_SECRET_ACCESS_KEY="$R2_S3_SECRET_ACCESS_KEY" \
+    "$PY" "$ROOT/scripts/r2_s3_put.py" \
+      --bucket "$bucket" \
+      --key "$key" \
+      --file "$file" \
+      --content-type "$content_type" \
+      --content-encoding "$content_encoding"
+  else
+    R2_S3_ENDPOINT="$endpoint" \
+    R2_S3_ACCESS_KEY_ID="$R2_S3_ACCESS_KEY_ID" \
+    R2_S3_SECRET_ACCESS_KEY="$R2_S3_SECRET_ACCESS_KEY" \
+    "$PY" "$ROOT/scripts/r2_s3_put.py" \
+      --bucket "$bucket" \
+      --key "$key" \
+      --file "$file" \
+      --content-type "$content_type"
+  fi
+}
+
+# r2_object_put_rest BUCKET KEY FILE CONTENT_TYPE [CONTENT_ENCODING]
+# Single-shot PUT via curl --http1.1 (or wrangler). Fine for small objects
+# (categorized ~4.5 MB gz). Large objects die on this network after ~17-20 s.
+r2_object_put_rest() {
+  local bucket="$1" key="$2" file="$3" content_type="$4" content_encoding="${5:-}"
+  local token account url http_code body_file
+  token="$(_wrangler_oauth_token)"
+  account="$(_cf_account_id)"
+
+  if [[ -n "$token" && -n "$account" ]] && command -v curl >/dev/null 2>&1; then
+    url="https://api.cloudflare.com/client/v4/accounts/${account}/r2/buckets/${bucket}/objects/${key}"
+    body_file="$(mktemp)"
+    local curl_args=(
+      -sS --http1.1
+      -o "$body_file"
+      -w "%{http_code}"
+      -X PUT
+      -H "Authorization: Bearer ${token}"
+      -H "Content-Type: ${content_type}"
+      --data-binary @"${file}"
+      --max-time 600
+    )
+    if [[ -n "$content_encoding" ]]; then
+      curl_args+=(-H "Content-Encoding: ${content_encoding}")
+    fi
+    # Capture -w status separately from curl's exit code. On a mid-stream
+    # reset curl often still prints "100" (Continue) to stdout; combining
+    # `curl || echo 000` would concatenate them into "100000".
+    local curl_rc=0
+    http_code="$(curl "${curl_args[@]}" "$url" 2>/dev/null)" || curl_rc=$?
+    if [[ "$curl_rc" -eq 0 && "$http_code" == "200" ]] \
+      && grep -q '"success"[[:space:]]*:[[:space:]]*true' "$body_file" 2>/dev/null; then
+      rm -f "$body_file"
+      echo "    Upload complete. (http1.1 REST)"
+      return 0
+    fi
+    local err_snip
+    err_snip="$(head -c 160 "$body_file" 2>/dev/null || true)"
+    rm -f "$body_file"
+    echo "    ✗ REST put failed (http=${http_code:-?} curl_rc=${curl_rc}) ${err_snip}"
+    return 1
+  fi
+
+  # No OAuth token path available - use wrangler as last resort.
+  if [[ -n "$content_encoding" ]]; then
+    wrangler r2 object put "${bucket}/${key}" \
+      --file="$file" \
+      --content-type="$content_type" \
+      --content-encoding="$content_encoding" \
+      --remote
+  else
+    wrangler r2 object put "${bucket}/${key}" \
+      --file="$file" \
+      --content-type="$content_type" \
+      --remote
+  fi
+}
+
+# r2_object_put BUCKET KEY FILE CONTENT_TYPE [CONTENT_ENCODING]
+# Chooses the upload transport:
+#   1. S3 multipart (aws CLI or boto3) when R2_S3_* credentials are set -
+#      required for large objects on this network (~20 s connection reset).
+#   2. curl HTTP/1.1 REST / wrangler - fine for small files; prints a setup
+#      hint when the file is large and S3 credentials are missing.
+r2_object_put() {
+  local bucket="$1" key="$2" file="$3" content_type="$4" content_encoding="${5:-}"
+  local size_bytes
+  size_bytes=$(wc -c < "$file" | tr -d ' ')
+
+  if _r2_s3_ready; then
+    r2_object_put_s3 "$bucket" "$key" "$file" "$content_type" "$content_encoding"
+    return $?
+  fi
+
+  # ~10 MB is about what a single connection can finish before the path resets.
+  # Full setup hint is printed once by cmd_deploy; keep this line short so
+  # retries don't spam the token-minting instructions three times.
+  if [[ "$size_bytes" -gt 10485760 ]]; then
+    echo "    ⚠ ${key} is $((size_bytes / 1024 / 1024)) MB - single-shot PUT usually fails without R2_S3_*."
+  fi
+  r2_object_put_rest "$bucket" "$key" "$file" "$content_type" "$content_encoding"
+}
+
+# ── cloud config ─────────────────────────────────────────────────────────
+# Cloudflare resource names come from the environment (or .env), never from
+# this script. TROVE_PAGES_URL is optional and defaults to the pages.dev URL.
+#   TROVE_PAGES_PROJECT  Cloudflare Pages project name
+#   TROVE_R2_BUCKET      R2 bucket that holds the data JSONs
+#   TROVE_D1_DB          D1 database that holds the MCP index
+_pages_url() {
+  echo "${TROVE_PAGES_URL:-https://${TROVE_PAGES_PROJECT}.pages.dev}"
+}
+
+# require_cloud_config VAR... - print a clear error and return 1 when
+# webapp/wrangler.toml is missing or any named env var is empty.
+require_cloud_config() {
+  local missing=() var
+  for var in "$@"; do
+    if [[ -z "${!var:-}" ]]; then
+      missing+=("$var")
+    fi
+  done
+  local ok=0
+  if [[ ! -f "$WEBAPP/wrangler.toml" ]]; then
+    echo "✗ webapp/wrangler.toml not found."
+    echo "  Copy the template and fill in your own names and ids:"
+    echo "    cp webapp/wrangler.example.toml webapp/wrangler.toml"
+    ok=1
+  fi
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "✗ missing cloud settings: ${missing[*]}"
+    echo "  Set them in .env (see .env.example), for example:"
+    for var in "${missing[@]}"; do
+      echo "    ${var}=..."
+    done
+    ok=1
+  fi
+  return "$ok"
+}
+
+write_env_var() {
+  # write_env_var KEY VALUE   - replaces or appends KEY=VALUE in .env.
+  local key="$1" val="$2"
+  touch "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+  if grep -qE "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    # Use a different sed delimiter so api keys with / don't break it.
+    sed -i.bak "s|^${key}=.*|${key}=${val}|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+  else
+    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+  fi
+}
+
+cmd_set_key() {
+  echo "Paste each key at the prompt.  Input is hidden.  Press enter to skip any."
+  echo
+
+  read -r -s -p "ANTHROPIC_API_KEY (sk-ant-...): " anthropic_key
+  echo
+  if [[ -n "$anthropic_key" ]]; then
+    write_env_var ANTHROPIC_API_KEY "$anthropic_key"
+    echo "  ✓ Anthropic key saved"
+  fi
+
+  read -r -s -p "OPENROUTER_API_KEY (sk-or-...): " or_key
+  echo
+  if [[ -n "$or_key" ]]; then
+    write_env_var OPENROUTER_API_KEY "$or_key"
+    echo "  ✓ OpenRouter key saved"
+  fi
+
+  read -r -s -p "DEEPSEEK_API_KEY (sk-...): " ds_key
+  echo
+  if [[ -n "$ds_key" ]]; then
+    write_env_var DEEPSEEK_API_KEY "$ds_key"
+    echo "  ✓ DeepSeek key saved"
+  fi
+  read -r -s -p "VOYAGE_API_KEY (pa-...): " voyage_key
+  echo
+  if [[ -n "$voyage_key" ]]; then
+    write_env_var VOYAGE_API_KEY "$voyage_key"
+    echo "  ✓ Voyage key saved"
+  fi
+
+  echo
+  echo "R2 S3 API tokens (optional; needed for large cloud data puts / multipart)."
+  echo "  Create at: Cloudflare dashboard → R2 → Manage R2 API Tokens"
+  echo "  Permission: Object Read & Write, scope it to your TROVE_R2_BUCKET bucket."
+  echo "  Endpoint form: https://<account_id>.r2.cloudflarestorage.com"
+  echo "  (account id is on the R2 overview page)"
+  echo
+
+  read -r -s -p "R2_S3_ACCESS_KEY_ID: " r2_ak
+  echo
+  if [[ -n "$r2_ak" ]]; then
+    write_env_var R2_S3_ACCESS_KEY_ID "$r2_ak"
+    echo "  ✓ R2_S3_ACCESS_KEY_ID saved"
+  fi
+
+  read -r -s -p "R2_S3_SECRET_ACCESS_KEY: " r2_sk
+  echo
+  if [[ -n "$r2_sk" ]]; then
+    write_env_var R2_S3_SECRET_ACCESS_KEY "$r2_sk"
+    echo "  ✓ R2_S3_SECRET_ACCESS_KEY saved"
+  fi
+
+  # Endpoint is not secret; allow visible paste for convenience.
+  read -r -p "R2_S3_ENDPOINT (https://<account_id>.r2.cloudflarestorage.com): " r2_ep
+  if [[ -n "$r2_ep" ]]; then
+    write_env_var R2_S3_ENDPOINT "$r2_ep"
+    echo "  ✓ R2_S3_ENDPOINT saved"
+  fi
+
+  echo
+  echo "CF Access service token (optional; lets ./trove deploy verify the LIVE site"
+  echo "  end-to-end after each data push)."
+  echo "  Create at: Zero Trust dashboard → Access → Service Auth → Service Tokens,"
+  echo "  then add a 'Service Auth' policy for it on your Pages project's Access app."
+  echo
+
+  read -r -s -p "CF_ACCESS_CLIENT_ID: " cf_cid
+  echo
+  if [[ -n "$cf_cid" ]]; then
+    write_env_var CF_ACCESS_CLIENT_ID "$cf_cid"
+    echo "  ✓ CF_ACCESS_CLIENT_ID saved"
+  fi
+
+  read -r -s -p "CF_ACCESS_CLIENT_SECRET: " cf_csec
+  echo
+  if [[ -n "$cf_csec" ]]; then
+    write_env_var CF_ACCESS_CLIENT_SECRET "$cf_csec"
+    echo "  ✓ CF_ACCESS_CLIENT_SECRET saved"
+  fi
+
+  echo
+  echo "✓ saved to $ENV_FILE (chmod 600, gitignored)"
+  echo "  to remove any: open .env in any editor, or just delete the file."
+}
+
+cmd_start() {
+  if ! is_listening "$WEB_PORT"; then
+    echo "▸ booting webapp (port $WEB_PORT)…"
+    ( cd "$WEBAPP" && nohup npm run dev > "$LOG_DIR/webapp.log" 2>&1 & )
+  else
+    echo "✓ webapp already up on $WEB_PORT"
+  fi
+
+  if ! is_listening "$WIKI_PORT"; then
+    if [[ -d "$ROOT/wiki" ]]; then
+      echo "▸ booting wiki server (port $WIKI_PORT)…"
+      ( cd "$ROOT" && nohup "$PY" wiki_server.py --port "$WIKI_PORT" > "$LOG_DIR/wiki.log" 2>&1 & )
+    fi
+  else
+    echo "✓ wiki already up on $WIKI_PORT"
+  fi
+
+  # Wait for the webapp to actually answer.
+  for i in $(seq 1 30); do
+    if curl -sSf "http://127.0.0.1:$WEB_PORT" >/dev/null 2>&1; then break; fi
+    sleep 0.5
+  done
+
+  if command -v open >/dev/null 2>&1; then
+    open "http://127.0.0.1:$WEB_PORT"
+  fi
+  echo "✓ open http://127.0.0.1:$WEB_PORT"
+  echo "  logs: $LOG_DIR"
+}
+
+cmd_update() {
+  local dry="" no_images=0 emergent=0
+  for arg in "$@"; do
+    case "$arg" in
+      --dry|--dry-run) dry="--dry-run" ;;
+      --no-images|--skip-images) no_images=1 ;;
+      --emergent) emergent=1 ;;  # use the legacy Sonnet emergent classifier instead of canonical
+      *) echo "unknown flag: $arg"; exit 1 ;;
+    esac
+  done
+
+  if [[ "$emergent" -eq 1 ]]; then
+    if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "$dry" ]]; then
+      echo "✗ ANTHROPIC_API_KEY not set (required by --emergent path)."
+      echo "  Run:  ./trove set-key"
+      exit 1
+    fi
+  else
+    if [[ -z "${OPENROUTER_API_KEY:-}" && -z "$dry" ]]; then
+      echo "✗ OPENROUTER_API_KEY not set (required by canonical reclassifier)."
+      echo "  Run:  ./trove set-key"
+      echo "  …or:  ./trove update --emergent  (use legacy Anthropic classifier)"
+      exit 1
+    fi
+  fi
+
+  ensure_python_deps
+
+  if [[ "$emergent" -eq 1 ]]; then
+    echo "▸ classifying new tweets (emergent / Sonnet)…"
+    ( cd "$ROOT" && "$PY" parse_and_classify.py )
+  else
+    echo "▸ classifying new tweets (canonical / Gemini Flash-Lite vision via OpenRouter)…"
+    ( cd "$ROOT" && "$PY" reclassify_canonical.py )
+  fi
+
+  if [[ "$no_images" -eq 1 ]]; then
+    echo "▸ URLs $([[ -n $dry ]] && echo '(DRY RUN)')…"
+    ( cd "$ROOT" && "$PY" enrich.py --only-urls $dry )
+    echo "▸ embeddings $([[ -n $dry ]] && echo '(DRY RUN)')…"
+    ( cd "$ROOT" && "$PY" enrich.py --only-embeddings $dry )
+    echo "  (skipped image descriptions per --no-images)"
+  else
+    echo "▸ enriching $([[ -n $dry ]] && echo '(DRY RUN)')…"
+    ( cd "$ROOT" && "$PY" enrich.py $dry )
+  fi
+
+  echo "✓ done. In the webapp /import, drop HTML + categorized_tweets.json + enriched_tweets.json."
+}
+
+cmd_wiki() {
+  if is_listening "$WIKI_PORT"; then
+    echo "✓ wiki already up on $WIKI_PORT"
+    return 0
+  fi
+  ensure_python_deps
+  echo "▸ wiki server on http://127.0.0.1:$WIKI_PORT"
+  cd "$ROOT" && exec "$PY" wiki_server.py --port "$WIKI_PORT"
+}
+
+cmd_stop() {
+  for port in "$WEB_PORT" "$WIKI_PORT"; do
+    if is_listening "$port"; then
+      echo "▸ killing :$port"
+      kill_port "$port"
+    fi
+  done
+  # Also clean any lingering dev/server processes by name.
+  pkill -f "vite" 2>/dev/null || true
+  pkill -f "wiki_server.py" 2>/dev/null || true
+  echo "✓ stopped."
+}
+
+cmd_status() {
+  if is_listening "$WEB_PORT"; then
+    echo "✓ webapp on http://127.0.0.1:$WEB_PORT"
+  else
+    echo "✗ webapp not running"
+  fi
+  if is_listening "$WIKI_PORT"; then
+    echo "✓ wiki   on http://127.0.0.1:$WIKI_PORT"
+  else
+    echo "✗ wiki   not running"
+  fi
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    echo "✓ ANTHROPIC_API_KEY   loaded (${ANTHROPIC_API_KEY:0:7}…${ANTHROPIC_API_KEY: -4})"
+  else
+    echo "✗ ANTHROPIC_API_KEY   not set"
+  fi
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+    echo "✓ OPENROUTER_API_KEY  loaded (${OPENROUTER_API_KEY:0:7}…${OPENROUTER_API_KEY: -4})"
+  else
+    echo "✗ OPENROUTER_API_KEY  not set - run ./trove set-key"
+  fi
+  if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
+    echo "✓ DEEPSEEK_API_KEY    loaded (${DEEPSEEK_API_KEY:0:7}…${DEEPSEEK_API_KEY: -4})"
+  else
+    echo "✗ DEEPSEEK_API_KEY    not set - run ./trove set-key"
+  fi
+  if [[ -n "${VOYAGE_API_KEY:-}" ]]; then
+    echo "✓ VOYAGE_API_KEY      loaded"
+  else
+    echo "✗ VOYAGE_API_KEY      not set"
+  fi
+  if _r2_s3_ready; then
+    echo "✓ R2_S3_*            loaded (multipart large puts enabled)"
+  else
+    echo "· R2_S3_*            not set - large R2 puts may fail (run ./trove set-key)"
+  fi
+  if [[ -n "${CF_ACCESS_CLIENT_ID:-}" && -n "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+    echo "✓ CF_ACCESS_CLIENT_* loaded (deploy verifies the live site end-to-end)"
+  else
+    echo "· CF_ACCESS_CLIENT_* not set - deploy verification skips the live-origin check"
+  fi
+  if [[ -n "${TROVE_PAGES_PROJECT:-}" && -n "${TROVE_R2_BUCKET:-}" && -n "${TROVE_D1_DB:-}" ]]; then
+    echo "✓ TROVE_* cloud names set (pages: $TROVE_PAGES_PROJECT, r2: $TROVE_R2_BUCKET, d1: $TROVE_D1_DB)"
+  else
+    echo "· TROVE_* cloud names not set - deploy and mcp-push are off (see .env.example)"
+  fi
+  if [[ -f "$WEBAPP/wrangler.toml" ]]; then
+    echo "✓ webapp/wrangler.toml present"
+  else
+    echo "· webapp/wrangler.toml absent - copy webapp/wrangler.example.toml to deploy"
+  fi
+}
+
+cmd_go() {
+  local skip_update=0 dry=0
+  local pass_through=()
+  for arg in "$@"; do
+    case "$arg" in
+      --no-update) skip_update=1 ;;
+      --dry|--dry-run) dry=1; pass_through+=("$arg") ;;
+      *) pass_through+=("$arg") ;;
+    esac
+  done
+
+  if [[ "$skip_update" -eq 0 ]]; then
+    # Guard the expansion: macOS ships bash 3.2, which throws "unbound variable"
+    # on an empty array under `set -u` (the no-flag `./trove go` case). The
+    # ${a[@]+"${a[@]}"} form expands to nothing when empty, to the elements
+    # otherwise - safe on bash 3.2 through 5.x.
+    cmd_update "${pass_through[@]+"${pass_through[@]}"}"
+  else
+    echo "▸ --no-update: skipping data refresh"
+  fi
+  cmd_start
+
+  # Push the freshly-generated JSONs to R2 so the cloud/mobile webapp sees the
+  # new tweets too. The LOCAL app reads these files off disk and is already
+  # current after cmd_update; only the cloud copy (R2) needs this step - that's
+  # why mobile lagged before. Best-effort by design:
+  #   - --data-only: the daily driver must NEVER ship the uncommitted
+  #     working-tree code as a cloud deploy. It only pushes DATA; ship code
+  #     deliberately with `./trove deploy` (or `--code-only`).
+  #   - skipped on --no-update / --dry (nothing new was generated to push)
+  #   - no-ops with a note when wrangler is absent
+  #   - a failed upload only warns; booting the local app must never depend on
+  #     a network round-trip succeeding, so we call cmd_deploy in an `if` and
+  #     never let it abort `go`.
+  if [[ "$skip_update" -eq 0 && "$dry" -eq 0 ]]; then
+    echo
+    if [[ -z "${TROVE_PAGES_PROJECT:-}" || -z "${TROVE_R2_BUCKET:-}" || -z "${TROVE_D1_DB:-}" || ! -f "$WEBAPP/wrangler.toml" ]]; then
+      echo "▸ cloud not configured - skipping the cloud (R2) push."
+      echo "  To enable it, set TROVE_PAGES_PROJECT, TROVE_R2_BUCKET and TROVE_D1_DB"
+      echo "  in .env and create webapp/wrangler.toml from webapp/wrangler.example.toml."
+    elif command -v wrangler >/dev/null 2>&1; then
+      echo "▸ pushing fresh data to the cloud (R2) so mobile updates too…"
+      if cmd_deploy --no-update --data-only; then
+        echo "  ↳ cloud updated - on your phone, open the site and tap ⟳ to pull it in."
+      else
+        echo "⚠ cloud (R2) push failed - the local app is unaffected."
+        echo "  Re-run ./trove deploy when ready to update mobile/cloud."
+      fi
+    else
+      echo "▸ wrangler not installed - skipping the cloud (R2) push."
+      echo "  Mobile/cloud stays on the last deploy until you install wrangler"
+      echo "  (npm i -g wrangler) and run ./trove deploy."
+    fi
+  fi
+
+  echo
+  echo "▸ Once the app loads, click the ⟳ button in the top nav to pull the"
+  echo "  fresh files into the webapp. (Or just /import as before.)"
+}
+
+# ── cmd_deploy ────────────────────────────────────────────────────────────
+# Refresh local data via the canonical pipeline, then upload the derived
+# JSON files to the Cloudflare R2 bucket that backs the cloud webapp.
+#
+# Requires:
+#   - `wrangler` on PATH (npm i -g wrangler) and `wrangler login` completed
+#   - TROVE_PAGES_PROJECT, TROVE_R2_BUCKET and TROVE_D1_DB in the environment
+#     (or .env), and webapp/wrangler.toml (copy webapp/wrangler.example.toml).
+#
+# Flow:
+#   1. Run cmd_update (same flags it accepts - --dry, --no-images, --emergent)
+#      to (re)generate categorized_tweets.json + enriched_tweets.json locally.
+#   2. wrangler r2 object put each file to R2 with a short cache-control TTL.
+#   3. The deployed Cloudflare /api/manifest Pages Function reads R2 ETags on
+#      every page load; the webapp's syncFromDisk re-imports on ETag change.
+#      No Pages redeploy needed - data is external to the bundle.
+# Push the MCP index (tweets + wiki) into D1 so /api/mcp answers from fresh
+# data. Incremental by default: reads (id, hash) pairs back from D1 and writes
+# only new, changed, and removed tweets, because D1's free tier caps rows
+# written per day and a daily deploy must not rewrite the whole archive.
+cmd_mcp_push() {
+  local full=0
+  for arg in "$@"; do
+    case "$arg" in
+      --full) full=1 ;;
+      *) echo "unknown flag: $arg"; return 1 ;;
+    esac
+  done
+  if ! command -v wrangler >/dev/null 2>&1; then
+    echo "✗ wrangler not found on PATH (npm install -g wrangler && wrangler login)."
+    return 1
+  fi
+  if ! require_cloud_config TROVE_D1_DB TROVE_PAGES_PROJECT; then
+    return 1
+  fi
+  local cat_file="$ROOT/categorized_tweets.json"
+  local enr_file="$ROOT/enriched_tweets.json"
+  if [[ ! -f "$cat_file" ]]; then
+    echo "✗ $cat_file not found. Run ./trove update first."
+    return 1
+  fi
+  ensure_python_deps
+  local d1_name="$TROVE_D1_DB"
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap "rm -rf '$tmpdir'" EXIT
+  local existing="$tmpdir/existing.json"
+  local sql="$tmpdir/mcp_d1.sql"
+  local summary="$tmpdir/summary.json"
+  local build_args=(--categorized "$cat_file" --output "$sql" --summary-json "$summary")
+  [[ -f "$enr_file" ]] && build_args+=(--enriched "$enr_file")
+  [[ -d "$ROOT/wiki" ]] && build_args+=(--wiki "$ROOT/wiki")
+
+  if [[ "$full" -eq 1 ]]; then
+    echo "▸ MCP index: full rebuild requested (--full)"
+    build_args+=(--full)
+  else
+    echo "▸ MCP index: reading current (id, hash) rows from D1 for an incremental push…"
+    # A missing table (first push) makes wrangler fail; fall back to a full build.
+    if ( cd "$WEBAPP" && wrangler d1 execute "$d1_name" --remote --json \
+          --command "SELECT id, h FROM mcp_tweets" > "$existing" 2>/dev/null ); then
+      build_args+=(--existing "$existing")
+    else
+      echo "  (no mcp_tweets table yet - doing the first full load)"
+      build_args+=(--full)
+    fi
+  fi
+  if ! "$PY" "$ROOT/scripts/build_mcp_d1.py" "${build_args[@]}"; then
+    echo "✗ MCP index build failed."
+    return 1
+  fi
+  local written deleted
+  written="$("$PY" -c "import json,sys;print(json.load(open(sys.argv[1]))['written'])" "$summary")"
+  deleted="$("$PY" -c "import json,sys;print(json.load(open(sys.argv[1]))['deleted'])" "$summary")"
+  echo "▸ MCP index: applying to D1 ($d1_name): $written tweets to write, $deleted to delete, plus wiki + meta…"
+  if ! ( cd "$WEBAPP" && retry wrangler d1 execute "$d1_name" --remote --yes --file "$sql" >/dev/null ); then
+    echo "✗ D1 execute failed. If the error mentions a daily write limit, retry tomorrow or"
+    echo "  upgrade the Workers plan; the first full load writes ~75k rows."
+    return 1
+  fi
+  echo "✓ MCP index pushed. Clients see it at: $(_pages_url)/api/mcp"
+}
+
+cmd_deploy() {
+  local skip_update=0 data_only=0 code_only=0
+  local pass_through=()
+  for arg in "$@"; do
+    case "$arg" in
+      --no-update) skip_update=1 ;;
+      --data-only) data_only=1 ;;
+      --code-only) code_only=1 ;;
+      *) pass_through+=("$arg") ;;
+    esac
+  done
+
+  if [[ "$data_only" -eq 1 && "$code_only" -eq 1 ]]; then
+    echo "✗ --data-only and --code-only are mutually exclusive."
+    return 1
+  fi
+
+  if ! command -v wrangler >/dev/null 2>&1; then
+    echo "✗ wrangler not found on PATH."
+    echo "  Install:  npm install -g wrangler"
+    echo "  Then:     wrangler login"
+    return 1
+  fi
+  maybe_hint_wrangler_upgrade
+
+  # Check the cloud config before any slow pipeline work. --code-only needs
+  # only the Pages project; a data push also needs the bucket and the D1 db.
+  if [[ "$code_only" -eq 1 ]]; then
+    require_cloud_config TROVE_PAGES_PROJECT || return 1
+  else
+    require_cloud_config TROVE_PAGES_PROJECT TROVE_R2_BUCKET TROVE_D1_DB || return 1
+  fi
+
+  local bucket="$TROVE_R2_BUCKET"
+  # Pages project name comes from TROVE_PAGES_PROJECT and must match `name =`
+  # in wrangler.toml. Explicit --project-name is belt-and-suspenders so a toml
+  # drift cannot create a new project (which would sit outside Cloudflare Access).
+  local pages_project="$TROVE_PAGES_PROJECT"
+  local pages_url
+  pages_url="$(_pages_url)"
+
+  # 1. Refresh local data (generate the JSONs). Skipped for --no-update, and
+  #    for --code-only (which only ships the bundle, no data).
+  if [[ "$skip_update" -eq 0 && "$code_only" -eq 0 ]]; then
+    echo "▸ refreshing local data first…"
+    # Guard the expansion: macOS ships bash 3.2, which throws "unbound variable"
+    # on an empty array under `set -u` (the no-flag `./trove go` case). The
+    # ${a[@]+"${a[@]}"} form expands to nothing when empty, to the elements
+    # otherwise - safe on bash 3.2 through 5.x.
+    cmd_update "${pass_through[@]+"${pass_through[@]}"}"
+  elif [[ "$code_only" -eq 1 ]]; then
+    echo "▸ --code-only: skipping data refresh (code deploy only)"
+  elif [[ "$skip_update" -eq 1 && "$data_only" -eq 1 ]]; then
+    # Invoked from `./trove go` after a successful update, or an explicit
+    # data-only re-push of existing JSONs.
+    echo "▸ --data-only: skipping data refresh (uploading existing JSONs)"
+  else
+    echo "▸ --no-update: skipping data refresh (using existing JSONs)"
+  fi
+
+  # 2. Build + deploy the app CODE, BEFORE any data push. This ordering is the
+  #    whole point of atomic deploys: shipping fresh data against a stale bundle
+  #    (old-code + new-data) is exactly the combo that stranded the mobile app.
+  #    A failed build or deploy aborts here, so the R2 data push never runs on
+  #    top of code that didn't ship. Skipped for --data-only.
+  if [[ "$data_only" -eq 0 ]]; then
+    echo "▸ building the webapp (npm run build)…"
+    if ! ( cd "$WEBAPP" && npm run build ); then
+      echo "✗ webapp build failed - aborting before the data push (code stays live, unchanged)."
+      return 1
+    fi
+    # wrangler.toml carries pages_build_output_dir = "dist" + all bindings.
+    # Explicit --project-name / --branch pin production; --commit-dirty=true
+    # silences the uncommitted-changes warning (dist/ is never committed).
+    # Must run from the webapp dir so wrangler finds wrangler.toml.
+    echo "▸ deploying to Cloudflare Pages project: $pages_project …"
+    if ! ( cd "$WEBAPP" && retry wrangler pages deploy \
+      --project-name="$pages_project" \
+      --branch=main \
+      --commit-dirty=true ); then
+      echo "✗ Cloudflare Pages deploy failed - aborting before the data push."
+      return 1
+    fi
+    echo "✓ app code deployed to $pages_url"
+  else
+    echo "▸ --data-only: skipping the webapp build + Pages deploy."
+  fi
+
+  # 3. Push the derived JSONs to R2 (unless --code-only).
+  if [[ "$code_only" -eq 1 ]]; then
+    echo "▸ --code-only: skipping the R2 data push."
+    echo "✓ deployed (code only) → $pages_url"
+    return 0
+  fi
+
+  local cat_file="$ROOT/categorized_tweets.json"
+  local enr_file="$ROOT/enriched_tweets.json"
+  if [[ ! -f "$cat_file" ]]; then
+    echo "✗ $cat_file not found. Run without --no-update first."
+    return 1
+  fi
+  if [[ ! -f "$enr_file" ]]; then
+    echo "✗ $enr_file not found. Run without --no-update first."
+    return 1
+  fi
+
+  # Pre-compress at deploy time. Cloudflare's edge only auto-compresses small
+  # responses, so these multi-MB R2 streams ship raw unless we gzip them here.
+  # We upload the .gz bytes under the ORIGINAL key with Content-Encoding: gzip;
+  # browsers (and fetch()) decompress transparently, so no webapp change is
+  # needed. categorized_tweets.json compresses ~80%; enriched_tweets.json is
+  # dominated by high-entropy embedding floats so only ~30% - net ~42% smaller.
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  # Clean up the compressed temp files on ANY exit - under `set -euo pipefail`
+  # a failed wrangler upload aborts the script before reaching a trailing rm.
+  # Double-quote the trap so $tmpdir is expanded NOW (while it's in scope) and
+  # the literal path is baked in: the EXIT trap fires at top-level script exit,
+  # long after this function's `local tmpdir` has gone out of scope, so deferred
+  # expansion (single quotes) would hit `set -u` and throw "tmpdir: unbound
+  # variable". mktemp -d paths never contain quotes/spaces, so this is safe.
+  trap "rm -rf '$tmpdir'" EXIT
+  local cat_gz="$tmpdir/categorized_tweets.json.gz"
+  local enr_gz="$tmpdir/enriched_tweets.json.gz"
+  echo "▸ pre-compressing JSONs (gzip -9)…"
+  # Explicit checks rather than relying on `set -e`: when cmd_deploy is invoked
+  # from cmd_go's `if`, `set -e` is suppressed inside it, so a silent gzip
+  # failure would otherwise upload a truncated file and report success.
+  if ! gzip -9 -c "$cat_file" > "$cat_gz"; then
+    echo "✗ gzip of categorized_tweets.json failed."
+    return 1
+  fi
+  if ! gzip -9 -c "$enr_file" > "$enr_gz"; then
+    echo "✗ gzip of enriched_tweets.json failed."
+    return 1
+  fi
+
+  # Build the streaming embeddings artifact (NDJSON) from the enriched file.
+  # This is the memory-safe format phones stream-import instead of the full
+  # enriched_tweets.json (which OOMs iOS Safari at JSON.parse time).
+  local ndjson_file="$ROOT/embeddings.ndjson"
+  local ndjson_gz="$tmpdir/embeddings.ndjson.gz"
+  echo "▸ building embeddings.ndjson (streaming artifact for mobile)…"
+  if ! "$PY" "$ROOT/scripts/build_embeddings_ndjson.py" --input "$enr_file" --output "$ndjson_file"; then
+    echo "✗ build of embeddings.ndjson failed."
+    return 1
+  fi
+  if ! gzip -9 -c "$ndjson_file" > "$ndjson_gz"; then
+    echo "✗ gzip of embeddings.ndjson failed."
+    return 1
+  fi
+
+  # Upload LARGE first (enriched), then categorized. enriched is the most
+  # failure-prone (~37 MB gzipped). If it fails, we abort before categorized
+  # so a partial push never leaves cloud with a newer tweet corpus than its
+  # enrichments. Prefer S3 multipart (R2_S3_*) for large objects; small-file
+  # path uses curl HTTP/1.1 + retry.
+  if _r2_s3_ready; then
+    echo "▸ uploading to R2 bucket: $bucket (S3 multipart; Content-Encoding: gzip; large-first)"
+  else
+    echo "▸ uploading to R2 bucket: $bucket (REST/wrangler; Content-Encoding: gzip; large-first)"
+    if [[ ! -f "$enr_file" ]] || [[ "$(wc -c < "$enr_file" | tr -d ' ')" -gt 10485760 ]]; then
+      _r2_s3_hint
+    fi
+  fi
+  echo "  ↑ enriched_tweets.json ($(ls -lh "$enr_file" | awk '{print $5}') → $(ls -lh "$enr_gz" | awk '{print $5}') gz)"
+  if ! retry r2_object_put "$bucket" "enriched_tweets.json" "$enr_gz" "application/json" "gzip"; then
+    echo "✗ upload of enriched_tweets.json failed after retries."
+    if ! _r2_s3_ready; then
+      _r2_s3_hint
+    fi
+    return 1
+  fi
+  echo "  ↑ embeddings.ndjson ($(ls -lh "$ndjson_file" | awk '{print $5}') → $(ls -lh "$ndjson_gz" | awk '{print $5}') gz)"
+  if ! retry r2_object_put "$bucket" "embeddings.ndjson" "$ndjson_gz" "application/x-ndjson" "gzip"; then
+    echo "⚠ upload of embeddings.ndjson failed - mobile streaming import will fall back to skipping embeddings."
+    # Non-fatal: desktop still gets the full enriched file; mobile just can't
+    # stream-import embeddings until the next deploy succeeds.
+  fi
+  echo "  ↑ categorized_tweets.json ($(ls -lh "$cat_file" | awk '{print $5}') → $(ls -lh "$cat_gz" | awk '{print $5}') gz)"
+  if ! retry r2_object_put "$bucket" "categorized_tweets.json" "$cat_gz" "application/json" "gzip"; then
+    echo "✗ upload of categorized_tweets.json failed after retries."
+    return 1
+  fi
+  # 4. Verify what the cloud actually SERVES, not just what we uploaded.
+  #    Upload success is not serve success: the 2026-07 outage was a proxy
+  #    encoding bug that every upload-side check missed. verify_cloud_data.py
+  #    reads the data back (S3 readback always; origin round-trip through the
+  #    live /api/data proxy when a CF Access service token is in .env) and
+  #    compares tweet count + newest-tweet date against the local file.
+  ensure_python_deps
+  echo "▸ verifying cloud data (readback + parse + newest-date check)…"
+  if ! "$PY" "$ROOT/scripts/verify_cloud_data.py" --local "$cat_file" --bucket "$bucket" --origin "$pages_url"; then
+    echo "✗ cloud data verification FAILED - the upload finished but the cloud is not serving"
+    echo "  what we pushed. Do NOT trust this deploy; see the mismatches above."
+    return 1
+  fi
+
+  # 5. Refresh the MCP index in D1 so /api/mcp serves the same corpus the
+  #    webapp just received. Incremental, so a routine deploy writes little.
+  if ! cmd_mcp_push; then
+    echo "✗ MCP index push failed - the webapp deploy above is fine, but /api/mcp is stale."
+    echo "  Re-run: ./trove mcp-push"
+    return 1
+  fi
+
+  if [[ "$data_only" -eq 1 ]]; then
+    echo "✓ deployed and verified (data only, gzipped). Reload the webapp; it picks up the new ETags on next load."
+  else
+    echo "✓ deployed and verified (code + data, gzipped) → $pages_url"
+    echo "  Reload the webapp; it picks up the new ETags on next load."
+  fi
+}
+
+case "${1:-start}" in
+  go)      shift; cmd_go "$@" ;;
+  start)   cmd_start ;;
+  update)  shift; cmd_update "$@" ;;
+  deploy)  shift; cmd_deploy "$@" ;;
+  mcp-push) shift; cmd_mcp_push "$@" ;;
+  set-key) cmd_set_key ;;
+  wiki)    cmd_wiki ;;
+  stop)    cmd_stop ;;
+  status)  cmd_status ;;
+  -h|--help|help)
+    sed -n '2,/^$/p' "$0" | sed '$d' ;;
+  *)
+    echo "unknown command: $1"; exit 1 ;;
+esac

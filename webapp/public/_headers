@@ -1,0 +1,11 @@
+# Cloudflare Pages security headers (applied to every response).
+# Verified against the built app: sql.js WASM needs 'wasm-unsafe-eval'; Recharts
+# and React inline element styles need style-src 'unsafe-inline'; tweet images
+# come from the X CDN (*.twimg.com); the retrieval Web Worker is same-origin.
+# In cloud/proxy mode the app only talks to same-origin /api/*, so connect-src
+# is 'self'. No inline <script> in the bundle, so script-src has no 'unsafe-inline'.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://rsms.me https://fonts.googleapis.com; font-src 'self' https://rsms.me https://fonts.gstatic.com; img-src 'self' data: blob: https://*.twimg.com; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>X Collector</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <img src="icon48.png" alt="" class="logo">
+      <div>
+        <h1>X Collector</h1>
+        <div class="subtitle">Scrapes any X timeline into a searchable HTML archive</div>
+      </div>
+      <span id="version" class="version"></span>
+    </header>
+
+    <section class="card source-card">
+      <div class="source-row">
+        <span class="source-caption">This tab</span>
+        <span id="sourceLabel" class="source-label">Checking…</span>
+      </div>
+      <div id="sourceHint" class="source-hint"></div>
+    </section>
+
+    <section class="card">
+      <div class="status-row">
+        <span id="statusPill" class="pill pill-idle"><span class="dot"></span><span id="statusText">Ready</span></span>
+        <span id="elapsed" class="elapsed"></span>
+      </div>
+      <div id="activity" class="activity">Open any X timeline, then press Start.</div>
+      <div id="warning" class="warning hidden"></div>
+
+      <div class="stats">
+        <div class="stat"><div class="stat-value" id="count">0</div><div class="stat-label">Collected</div></div>
+        <div class="stat"><div class="stat-value" id="rate">–</div><div class="stat-label">Per minute</div></div>
+        <div class="stat"><div class="stat-value" id="imageCount">0</div><div class="stat-label">With images</div></div>
+        <div class="stat"><div class="stat-value" id="videoCount">0</div><div class="stat-label">With video</div></div>
+        <div class="stat"><div class="stat-value" id="articleCount">0</div><div class="stat-label">Articles</div></div>
+        <div class="stat"><div class="stat-value small" id="lastDate">–</div><div class="stat-label">Last seen</div></div>
+      </div>
+      <div id="span" class="span"></div>
+    </section>
+
+    <section class="card">
+      <div class="button-group">
+        <button id="startBtn" class="btn btn-primary">Start</button>
+        <button id="pauseBtn" class="btn btn-secondary" disabled>Pause</button>
+        <button id="stopBtn" class="btn btn-danger" disabled>Stop</button>
+      </div>
+      <div class="button-group">
+        <button id="downloadBtn" class="btn btn-success" disabled>Download HTML</button>
+        <button id="clearBtn" class="btn btn-ghost" disabled>Clear</button>
+      </div>
+      <label class="check">
+        <input type="checkbox" id="mergeInput" checked>
+        <span>Keep posts already collected in this export</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="skipKnownInput" checked>
+        <span>Skip posts from earlier exports</span>
+      </label>
+      <div class="button-group known-group">
+        <button id="importBtn" class="btn btn-ghost">Import earlier exports…</button>
+        <button id="forgetKnownBtn" class="btn btn-ghost" disabled>Forget</button>
+      </div>
+      <div id="knownStatus" class="hint known-status"></div>
+      <input type="file" id="importInput" accept=".html,text/html" multiple hidden>
+    </section>
+
+    <details class="card options" id="options">
+      <summary>Options</summary>
+      <div class="field-row">
+        <div class="field">
+          <label for="dateFrom">Posts from</label>
+          <input type="month" id="dateFrom">
+        </div>
+        <div class="field">
+          <label for="dateTo">Posts to</label>
+          <input type="month" id="dateTo">
+        </div>
+      </div>
+      <p class="hint">Filters on the post's own date. Likes are ordered by when you liked them and search by relevance, so the collector keeps going until 50 older posts appear in a row.</p>
+      <div class="field">
+        <label for="folderInput">Save into Downloads/</label>
+        <input type="text" id="folderInput" placeholder="trove" spellcheck="false">
+      </div>
+      <p class="hint">Remembered per kind of page. Every source defaults to "trove". Link Downloads/trove to the exports/ folder in your Trove checkout, and the pipeline reads every export.</p>
+    </details>
+
+    <div id="error" class="error hidden"></div>
+  </div>
+
+  <script src="source.js"></script>
+  <script src="known.js"></script>
+  <script src="report.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

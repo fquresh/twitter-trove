@@ -1,0 +1,22 @@
+# Build output
+dist/
+.vite/
+*.tsbuildinfo
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+.playwright/
+
+# Logs
+*.log
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Wrangler local dev state + local-only vars
+.wrangler/
+.dev.vars

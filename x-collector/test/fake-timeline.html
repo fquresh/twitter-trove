@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Fake X timeline (virtualized)</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #000; color: #e7e9ea; }
+    #timeline { position: relative; }
+    article { position: absolute; left: 0; right: 0; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #2f3336; }
+    .name { font-weight: 700; }
+    .handle { color: #71767b; }
+    img.photo { display: block; max-height: 260px; }
+    .quote { border: 1px solid #2f3336; border-radius: 12px; padding: 8px; margin-top: 8px; }
+    .promoted { color: #71767b; font-size: 12px; }
+    #footer { padding: 24px; text-align: center; color: #71767b; }
+    button { padding: 8px 16px; }
+  </style>
+</head>
+<body>
+  <!--
+    Simulates an X timeline closely enough to exercise the collector. Every X
+    surface the collector supports (likes, bookmarks, profile, search, list,
+    thread) renders the same virtualized article[data-testid="tweet"] nodes:
+      - items are fetched in pages of 20 with network latency
+      - only items within the overscan window of the visible area are mounted
+        (?overscan, in viewports; 0.5 matches X's aggressive unmounting)
+      - one page load fails and shows a Retry button (as X does)
+      - markup mirrors the real data-testid hooks the collector reads
+      - an end-of-timeline marker once everything is loaded (as X does)
+      - ?lag models X's React commit lag: the virtualizer coalesces scroll
+        events and renders the window for the CURRENT scroll position at most
+        once per `lag` ms. A collector that scrolls faster than the window can
+        re-render walks past posts that were never mounted - this is the race
+        that loses posts on a loaded machine.
+    Query string: ?n=400 (total tweets), ?fail=6 (page index that fails once),
+    ?lag=0 (virtualizer render lag in ms).
+  -->
+  <div id="timeline"></div>
+  <div id="footer"></div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const TOTAL = Number(params.get('n') || 400);
+    const FAIL_PAGE = Number(params.get('fail') ?? 6);
+    const LAG = Number(params.get('lag') || 0);
+    const PAGE = 20;
+    const OVERSCAN = Number(params.get('overscan') ?? 0.5); // viewports above/below kept mounted
+
+    // Deterministic pseudo-random for stable fixtures.
+    let seed = 42;
+    const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+
+    const items = [];
+    for (let i = 0; i < TOTAL; i++) {
+      const id = String(1700000000000000000n + BigInt(i * 7919));
+      const hasPhoto = rnd() < 0.4;
+      const hasQuote = rnd() < 0.15;
+      const hasVideo = !hasPhoto && rnd() < 0.15;
+      const isArticle = i % 97 === 5;
+      const promoted = i % 61 === 30;
+      items.push({
+        i, id, hasPhoto, hasQuote, hasVideo, isArticle, promoted,
+        name: `User ${i} 🔥`,
+        handle: `user_${i}`,
+        text: `Tweet #${i} about markets 📈 and AI; arr[0]; done.`,
+        ts: new Date(Date.UTC(2026, 0, 1) - i * 3_600_000).toISOString(),
+        height: 160 + Math.floor(rnd() * 360) + (hasPhoto ? 200 : 0) + (hasQuote ? 120 : 0),
+        likes: Math.floor(rnd() * 20000),
+      });
+    }
+    window.__fake = { total: TOTAL, ids: items.filter((t) => !t.promoted).map((t) => t.id), promoted: items.filter((t) => t.promoted).length };
+
+    let loaded = 0;      // number of items the "server" has delivered
+    let fetching = false;
+    let failedOnce = false;
+    let showRetry = false;
+    const timeline = document.getElementById('timeline');
+    const footer = document.getElementById('footer');
+    const offsets = [];
+
+    function layout() {
+      let y = 0;
+      for (let i = 0; i < loaded; i++) { offsets[i] = y; y += items[i].height; }
+      timeline.style.height = y + 'px';
+    }
+
+    function render() {
+      const top = window.scrollY - window.innerHeight * OVERSCAN;
+      const bottom = window.scrollY + window.innerHeight * (1 + OVERSCAN);
+      const want = new Set();
+      for (let i = 0; i < loaded; i++) {
+        const y = offsets[i];
+        if (y + items[i].height >= top && y <= bottom) want.add(i);
+      }
+      for (const node of Array.from(timeline.children)) {
+        if (!want.has(Number(node.dataset.i))) node.remove();
+      }
+      for (const i of want) {
+        if (!timeline.querySelector(`[data-i="${i}"]`)) timeline.appendChild(articleFor(items[i]));
+      }
+      footer.innerHTML = showRetry
+        ? '<div>Something went wrong. Try reloading.</div><div role="button" id="retry">Retry</div>'
+        : (loaded >= TOTAL ? "<div id=\"end\">You're all caught up</div>" : '<div role="progressbar">Loading…</div>');
+      if (showRetry) document.getElementById('retry').onclick = () => { showRetry = false; fetchMore(); };
+    }
+
+    // With LAG set, renders coalesce the way React does on a busy main thread:
+    // the window is rebuilt for whatever the scroll position is when the timer
+    // fires, so intermediate positions are never mounted.
+    let renderTimer = null;
+    function scheduleRender() {
+      if (!LAG) return render();
+      if (renderTimer !== null) return;
+      renderTimer = setTimeout(() => { renderTimer = null; render(); }, LAG);
+    }
+
+    function articleFor(t) {
+      const a = document.createElement('article');
+      a.setAttribute('data-testid', 'tweet');
+      a.dataset.i = t.i;
+      a.style.top = offsets[t.i] + 'px';
+      a.style.height = t.height + 'px';
+      const status = `/${t.handle}/status/${t.id}`;
+      const timeHtml = t.promoted
+        ? '<span class="promoted">Promoted</span>'
+        : `<a role="link" href="${status}"><time datetime="${t.ts}">${t.ts.slice(0, 10)}</time></a>`;
+      const photo = t.hasPhoto
+        ? `<a href="${status}/photo/1"><img class="photo" src="https://pbs.twimg.com/media/M${t.i}.jpg?format=jpg&name=small" alt="Image"></a>` : '';
+      const quote = t.hasQuote
+        ? `<div class="quote" role="link"><div data-testid="User-Name"><a role="link" href="/quoted"><span>Quoted</span></a><a role="link" href="/quoted"><span>@quoted</span></a></div>
+             <div data-testid="tweetText"><span>quoted text</span></div>
+             <img src="https://pbs.twimg.com/media/Q${t.i}.jpg?format=jpg&name=small" alt="Image"></div>` : '';
+      const video = t.hasVideo ? '<div data-testid="videoPlayer"><video></video></div>' : '';
+      const article = t.isArticle
+        ? `<a href="/${t.handle}/article/${t.id}"><span>Article title ${t.i}</span></a>` : '';
+      a.innerHTML = `
+        <div data-testid="User-Name">
+          <a role="link" href="/${t.handle}"><span>User ${t.i} </span><img alt="🔥" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></a>
+          <a role="link" href="/${t.handle}"><span>@${t.handle}</span></a>
+          ${timeHtml}
+        </div>
+        <div data-testid="tweetText"><span>Tweet #${t.i} about markets </span><img alt="📈" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span> and AI; arr[0]; done.</span></div>
+        ${article}${photo}${quote}${video}
+        <div role="group">
+          <button data-testid="retweet" aria-label="${Math.floor(t.likes / 7)} reposts. Repost"></button>
+          <button data-testid="like" aria-label="${t.likes.toLocaleString('en-US')} Likes. Like"></button>
+        </div>`;
+      return a;
+    }
+
+    function fetchMore() {
+      if (fetching || showRetry || loaded >= TOTAL) return;
+      fetching = true;
+      const pageIndex = loaded / PAGE;
+      setTimeout(() => {
+        fetching = false;
+        if (pageIndex === FAIL_PAGE && !failedOnce) {
+          failedOnce = true;
+          showRetry = true;
+          render();
+          return;
+        }
+        loaded = Math.min(TOTAL, loaded + PAGE);
+        layout();
+        scheduleRender();
+      }, 300 + rnd() * 400);
+    }
+
+    function maybeLoad() {
+      const nearBottom = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 800;
+      if (nearBottom) fetchMore();
+    }
+
+    window.addEventListener('scroll', () => { scheduleRender(); maybeLoad(); });
+    window.addEventListener('resize', () => { layout(); scheduleRender(); });
+    setTimeout(() => { fetchMore(); }, 200);
+  </script>
+</body>
+</html>

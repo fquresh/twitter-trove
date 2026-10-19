@@ -1,0 +1,337 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --chart-accent: #7c3aed;
+    --chart-highlight: #a78bfa;
+    --chart-axis: #64748b;
+    --chart-grid: rgba(15, 23, 42, 0.06);
+    --keyboard-height: 0px;
+  }
+  html.dark {
+    --chart-accent: #8b5cf6;
+    --chart-highlight: #7c3aed;
+    --chart-axis: #94a3b8;
+    --chart-grid: rgba(255, 255, 255, 0.06);
+  }
+
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Default theme is LIGHT - minimalistic, futuristic.  A subtle lavender
+   * gradient anchors the page so it doesn't feel sterile. */
+  body {
+    background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(167, 139, 250, 0.18), transparent 70%),
+      radial-gradient(900px 500px at 110% 30%, rgba(124, 58, 237, 0.12), transparent 65%),
+      #fafafa;
+    color: #0f172a;
+    min-height: 100vh;
+    /* iOS notch / home indicator are handled by their owners, once each: the
+     * header carries the top inset and the shell reserves the bottom one for
+     * the fixed tab bar. Padding here too would apply them twice. */
+  }
+
+  /* Dark mode keeps the original midnight palette, with a violet glow. */
+  html.dark body {
+    background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(124, 58, 237, 0.22), transparent 70%),
+      radial-gradient(900px 500px at 110% 30%, rgba(34, 211, 238, 0.10), transparent 65%),
+      theme('colors.ink.900');
+    color: theme('colors.ink.50');
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(15, 23, 42, 0.18);
+    border-radius: 4px;
+  }
+  html.dark ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.2);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(15, 23, 42, 0.32);
+  }
+  html.dark ::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.4);
+  }
+
+  /* Subtle dot grid only in dark mode - the light mode lavender gradient
+   * carries the futuristic feeling on its own. */
+  html.dark .bg-grid {
+    background-image:
+      radial-gradient(rgba(167, 139, 250, 0.08) 1px, transparent 1px),
+      linear-gradient(180deg, rgba(11, 17, 32, 0) 0%, rgba(11, 17, 32, 0.8) 80%);
+    background-size: 22px 22px, 100% 100%;
+  }
+}
+
+@layer components {
+  /* ── Cards ────────────────────────────────────────────────────────────── */
+  .card {
+    @apply rounded-2xl border border-canvas-200 bg-white/90 shadow-soft transition-shadow;
+  }
+  .card:hover {
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.06),
+      0 14px 36px -16px rgba(124, 58, 237, 0.18);
+  }
+  html.dark .card {
+    @apply border-white/5 bg-ink-800/80 shadow-glass;
+  }
+  html.dark .card:hover {
+    box-shadow:
+      0 1px 0 0 rgba(255, 255, 255, 0.04) inset,
+      0 14px 36px -16px rgba(124, 58, 237, 0.4);
+  }
+
+  .surface {
+    @apply rounded-xl border border-canvas-200 bg-white;
+  }
+  html.dark .surface {
+    @apply border-white/5 bg-ink-800/60;
+  }
+
+  /* ── Buttons ──────────────────────────────────────────────────────────── */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/50 focus-visible:ring-offset-1 focus-visible:ring-offset-canvas-100 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  @media (max-width: 767px) {
+    .btn {
+      @apply min-h-[44px];
+    }
+  }
+  html.dark .btn {
+    @apply focus-visible:ring-offset-ink-900;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent-600 text-white shadow-soft hover:bg-accent-700 hover:shadow-md active:scale-[0.98] active:bg-accent-800;
+  }
+  html.dark .btn-primary {
+    @apply bg-accent-500 hover:bg-accent-400 active:bg-accent-600;
+  }
+
+  .btn-ghost {
+    @apply btn bg-canvas-150 text-ink-850 hover:bg-canvas-200 active:bg-canvas-300 active:scale-[0.98];
+  }
+  html.dark .btn-ghost {
+    @apply bg-white/5 text-ink-100 hover:bg-white/10 active:bg-white/15;
+  }
+
+  .btn-outline {
+    @apply btn border border-canvas-300 bg-white text-ink-850 hover:border-accent-300 hover:bg-accent-50 hover:text-accent-800 active:bg-accent-100 active:scale-[0.98];
+  }
+  html.dark .btn-outline {
+    @apply border-white/10 bg-white/5 text-ink-100 hover:border-accent-400/40 hover:bg-white/10 hover:text-accent-200 active:bg-white/15;
+  }
+
+  .btn-destructive {
+    @apply btn border border-red-200 bg-white text-red-700 hover:border-red-300 hover:bg-red-50 active:bg-red-100 active:scale-[0.98];
+  }
+  html.dark .btn-destructive {
+    @apply border-red-500/30 bg-white/5 text-red-300 hover:border-red-500/40 hover:bg-red-500/10 active:bg-red-500/15;
+  }
+
+  /* ── Chip / pill ──────────────────────────────────────────────────────── */
+  .chip {
+    @apply inline-flex min-h-[32px] items-center justify-center gap-1 rounded-full border border-canvas-300 bg-white px-2.5 py-1 text-xs text-ink-850 transition-all duration-150 ease-out hover:border-accent-300 hover:bg-accent-50 hover:text-accent-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/40 active:scale-[0.98];
+  }
+  html.dark .chip {
+    @apply border-white/10 bg-white/5 text-ink-100 hover:bg-white/10 hover:text-accent-200;
+  }
+  @media (max-width: 767px) {
+    .chip {
+      @apply min-h-[44px];
+    }
+  }
+
+
+  /* Scrollable chip strip: edge-fade on mobile only. Desktop wraps, so no mask. */
+  .chip-strip {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  @media (max-width: 767px) {
+    .chip-strip {
+      mask-image: linear-gradient(to right, transparent 0, black 12px, black calc(100% - 12px), transparent 100%);
+      -webkit-mask-image: linear-gradient(to right, transparent 0, black 12px, black calc(100% - 12px), transparent 100%);
+    }
+  }
+
+  /* ── Form input ───────────────────────────────────────────────────────── */
+  .input {
+    @apply w-full rounded-xl border border-canvas-300 bg-white px-3.5 py-2.5 text-sm text-ink-850 shadow-sm transition-all duration-150 ease-out placeholder:text-ink-400 focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/15;
+  }
+  html.dark .input {
+    @apply border-white/10 bg-ink-850 text-ink-50 focus:ring-accent-500/25;
+  }
+  @media (max-width: 767px) {
+    .input {
+      @apply text-base;
+    }
+  }
+
+  .label {
+    @apply text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-400;
+  }
+  html.dark .label {
+    @apply text-ink-300;
+  }
+
+  /* One focus ring for every interactive element. .btn and .chip carry their
+   * own; nav links, tab-bar items and header icon buttons relied on the UA
+   * default, which the pill navbar's dark background swallows. */
+  a:focus-visible,
+  button:focus-visible,
+  summary:focus-visible,
+  [role='button']:focus-visible {
+    @apply outline-none ring-2 ring-accent-500/70 ring-offset-2 ring-offset-canvas-100;
+  }
+  html.dark a:focus-visible,
+  html.dark button:focus-visible,
+  html.dark summary:focus-visible,
+  html.dark [role='button']:focus-visible {
+    @apply ring-offset-ink-900;
+  }
+
+  .ticker {
+    @apply inline-block rounded-md bg-accent-100 px-1.5 font-mono text-[11px] font-medium text-accent-700;
+  }
+  html.dark .ticker {
+    @apply bg-accent-500/20 text-accent-300;
+  }
+
+  .hashtag {
+    @apply text-accent-600 hover:underline;
+  }
+  html.dark .hashtag {
+    @apply text-accent-300;
+  }
+
+  /* ── Floating pill navbar (Visitors-style) ───────────────────────────── */
+  .nav-pill {
+    @apply inline-flex items-center gap-1 rounded-full bg-ink-900/95 p-1.5 shadow-nav backdrop-blur-md;
+  }
+  .nav-pill-link {
+    @apply rounded-full px-3.5 py-1.5 text-[13px] font-medium text-ink-200 transition-colors hover:text-white;
+  }
+  .nav-pill-link-active {
+    @apply bg-white/10 text-white;
+  }
+  .nav-pill-cta {
+    @apply rounded-full bg-accent-500 px-4 py-1.5 text-[13px] font-semibold text-white transition-colors hover:bg-accent-400;
+  }
+
+  /* ── Section accent (the soft purple blobs from the recording) ───────── */
+  .section-blob {
+    background:
+      radial-gradient(60% 80% at 30% 30%, rgba(167, 139, 250, 0.35), transparent 70%),
+      radial-gradient(60% 80% at 80% 70%, rgba(99, 102, 241, 0.25), transparent 70%);
+  }
+
+  /* ── Heading display ─────────────────────────────────────────────────── */
+  .h-display {
+    @apply font-display text-3xl font-bold tracking-tight text-ink-900 md:text-4xl;
+    letter-spacing: -0.025em;
+  }
+  html.dark .h-display {
+    @apply text-white;
+  }
+
+  .glow-accent {
+    box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.25), 0 0 24px -6px rgba(124, 58, 237, 0.45);
+  }
+}
+
+/* ── Mobile iOS-native card language (< md) ─────────────────────────── */
+@media (max-width: 767px) {
+  html {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+  }
+
+  body {
+    background: linear-gradient(180deg, #7bb7ff 0%, #4a90ff 100%);
+    color: #1c1c1e;
+  }
+
+  html.dark body {
+    background: linear-gradient(180deg, #1c3a5e 0%, #0b1626 100%);
+    color: #f1f5f9;
+  }
+
+  /* Let the blue gradient show through instead of the dark grid. */
+  .bg-grid,
+  html.dark .bg-grid {
+    background: transparent !important;
+  }
+
+  :root {
+    --chart-accent: #007aff;
+    --chart-highlight: #5ac8fa;
+    --chart-axis: #8e8e93;
+    --chart-grid: rgba(0, 0, 0, 0.06);
+  }
+
+  html.dark {
+    --chart-accent: #0a84ff;
+    --chart-highlight: #64d2ff;
+    --chart-axis: #8e8e93;
+    --chart-grid: rgba(255, 255, 255, 0.08);
+  }
+
+  .card {
+    background: rgba(255, 255, 255, 0.92);
+    border: none;
+    border-radius: 18px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  }
+
+  html.dark .card {
+    background: rgba(30, 30, 30, 0.92);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  }
+
+  .h-display {
+    font-size: 28px;
+    line-height: 1.15;
+  }
+}
+
+/* Chat: a cited source card flashes when its inline footnote is clicked. */
+.chat-source-flash {
+  animation: chat-source-flash 1.6s ease-out;
+}
+@keyframes chat-source-flash {
+  0% {
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.55);
+    border-color: rgba(124, 58, 237, 0.8);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0);
+  }
+}
+
+/* Respect the OS "reduce motion" setting. The UI animates pulses, pings,
+ * skeletons and the source flash unconditionally otherwise. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,63 @@
+# Secrets and local config
+.env
+.env.local
+.env.*.local
+.dev.vars
+wrangler.toml
+
+# Your collected X exports. No slash: `exports` may be a symlink to Downloads/trove.
+/exports
+x-collector/x-*.html
+/x-*.html
+
+# Pipeline outputs and caches (large, regenerable, user-specific)
+categorized_tweets.json
+categorized_tweets.smoke.json
+tweet_analysis.md
+tweet_analysis.smoke.md
+enriched_tweets.json
+embeddings.ndjson
+.classification_cache.json
+.canonical_classification_cache.json
+.canonical_classification_cache.textonly-backup.json
+.embedding_cache.json
+.url_content_cache.json
+.image_description_cache.json
+*.bak
+*.bak.*
+
+# Wiki - LLM-maintained synthesis pages, user-specific
+/wiki/
+
+# trove launcher logs
+.trove-logs/
+*.log
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Node and build output
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+/package-lock.json
+
+# Cloudflare wrangler local state
+.wrangler/
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+.playwright/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
