@@ -172,6 +172,11 @@ export function MarkdownMessage({ content }: { content: string }) {
         remarkPlugins={[remarkGfm, remarkCitations as unknown as typeof remarkGfm]}
         urlTransform={urlTransform}
         components={components}
+        // Model output is untrusted (prompt injection via collected posts).
+        // Never mount <img>: a remote src is a zero-click request to any host.
+        disallowedElements={['img']}
+        unwrapDisallowed
+        skipHtml
       >
         {content}
       </ReactMarkdown>

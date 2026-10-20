@@ -1,4 +1,4 @@
-import { defineConfig, type UserConfig } from 'vite';
+import { defineConfig, type Plugin, type UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
 
@@ -12,8 +12,29 @@ import { resolve } from 'node:path';
 // defineConfig and widen the type for `test`.
 type ViteConfigWithTest = UserConfig & { test: Record<string, unknown> };
 
+// index.html carries a CSP meta tag for local mode (public/_headers applies on
+// Cloudflare Pages only). `vite dev` needs two more sources than the built app:
+// the inline React Refresh preamble and the HMR websocket. This plugin adds
+// them for the dev server only, so the build keeps the strict policy.
+function devCsp(): Plugin {
+  const SCRIPT = "script-src 'self'";
+  const CONNECT = "connect-src 'self'";
+  return {
+    name: 'trove-dev-csp',
+    apply: 'serve',
+    transformIndexHtml(html) {
+      if (!html.includes(SCRIPT) || !html.includes(CONNECT)) {
+        throw new Error('trove-dev-csp: the CSP meta tag in index.html changed shape');
+      }
+      return html
+        .replace(SCRIPT, `${SCRIPT} 'unsafe-inline'`)
+        .replace(CONNECT, `${CONNECT} ws://127.0.0.1:5174 ws://localhost:5174`);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), devCsp()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
