@@ -60,6 +60,7 @@ export default {
       },
       fontFamily: {
         sans: [
+          '"Inter Variable"',
           'Inter',
           '-apple-system',
           'BlinkMacSystemFont',
@@ -67,7 +68,7 @@ export default {
           'Roboto',
           'sans-serif',
         ],
-        display: ['"Inter Tight"', 'Inter', '-apple-system', 'sans-serif'],
+        display: ['"Inter Tight Variable"', '"Inter Variable"', 'Inter', '-apple-system', 'sans-serif'],
       },
       boxShadow: {
         glass: '0 1px 0 0 rgba(255,255,255,0.03) inset, 0 10px 30px -15px rgba(0,0,0,0.6)',

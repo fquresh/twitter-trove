@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from 'react-router-dom';
 
+// Self-hosted fonts (SIL OFL 1.1). Vite bundles the woff2 files, so no page
+// load contacts a font CDN.
+import '@fontsource-variable/inter';
+import '@fontsource-variable/inter-tight';
 import './index.css';
 import { router } from './App';
 import { DbProvider } from './lib/dbContext';

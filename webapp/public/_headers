@@ -4,8 +4,10 @@
 # come from the X CDN (*.twimg.com); the retrieval Web Worker is same-origin.
 # In cloud/proxy mode the app only talks to same-origin /api/*, so connect-src
 # is 'self'. No inline <script> in the bundle, so script-src has no 'unsafe-inline'.
+# Fonts are self-hosted (bundled from @fontsource-variable), so style-src and
+# font-src need no third-party host. webapp/index.html mirrors this policy.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://rsms.me https://fonts.googleapis.com; font-src 'self' https://rsms.me https://fonts.gstatic.com; img-src 'self' data: blob: https://*.twimg.com; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https://*.twimg.com; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
