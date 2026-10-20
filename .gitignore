@@ -1,5 +1,6 @@
 # Secrets and local config
 .env
+.wiki_token
 .env.local
 .env.*.local
 .dev.vars
@@ -25,6 +26,17 @@ embeddings.ndjson
 .image_description_cache.json
 *.bak
 *.bak.*
+# Variants, temp files, and deploy artifacts that also hold real data.
+categorized_tweets*.json
+enriched_tweets*.json
+tweet_analysis*.md
+*.json.gz
+*.ndjson.gz
+*.tmp
+*.sql
+mcp_d1.sql
+existing.json
+summary.json
 
 # Wiki - LLM-maintained synthesis pages, user-specific
 /wiki/
