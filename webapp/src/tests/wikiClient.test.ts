@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeWikiClient, normalizeWikiPath } from '../chat/wikiClient';
 import { summarizeOutput } from '../components/chat/ToolSteps';
+import { useChatStore } from '../state/chatStore';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -53,5 +54,25 @@ describe('wiki client read', () => {
       throw new Error('down');
     });
     expect(await makeWikiClient('http://x').read({ path: 'people/jhalvorsen' })).toEqual({ error: 'wiki_unreachable' });
+  });
+});
+
+describe('wiki client auth', () => {
+  afterEach(() => useChatStore.getState().setWikiToken(''));
+
+  it('sends the local server token on wiki routes but not on /health', async () => {
+    const seen: Array<{ url: string; auth: string | null }> = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      seen.push({ url, auth: new Headers(init?.headers).get('Authorization') });
+      return new Response('{}', { status: 200 });
+    });
+    useChatStore.getState().setWikiToken('dummy-local-token');
+    const c = makeWikiClient('http://x');
+    await c.search({ query: 'agent memory' });
+    await c.list({});
+    await c.read({ path: 'people/jhalvorsen' });
+    await c.health();
+    expect(seen.slice(0, 3).every((s) => s.auth === 'Bearer dummy-local-token')).toBe(true);
+    expect(seen[3]).toEqual({ url: 'http://x/health', auth: null });
   });
 });

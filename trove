@@ -35,6 +35,18 @@ LOG_DIR="$ROOT/.trove-logs"
 ENV_FILE="$ROOT/.env"
 mkdir -p "$LOG_DIR"
 
+# Paths to delete when the script exits, also after an error or Ctrl-C. One
+# EXIT trap owns all cleanup, so no function can replace another one's trap.
+_CLEANUP_PATHS=()
+_cleanup() {
+  if [[ "${#_CLEANUP_PATHS[@]}" -gt 0 ]]; then
+    rm -rf -- "${_CLEANUP_PATHS[@]}"
+  fi
+}
+trap _cleanup EXIT
+# Call on_exit_rm in the current shell, not inside $(...), or the path is lost.
+on_exit_rm() { _CLEANUP_PATHS+=("$1"); }
+
 # Load .env if present.  Values are exported into the current shell so the
 # Python tools below see them without us having to forward each one.
 if [[ -f "$ENV_FILE" ]]; then
@@ -269,7 +281,7 @@ r2_object_put_s3() {
 
 # r2_object_put_rest BUCKET KEY FILE CONTENT_TYPE [CONTENT_ENCODING]
 # Single-shot PUT via curl --http1.1 (or wrangler). Fine for small objects
-# (categorized ~4.5 MB gz). Large objects die on this network after ~17-20 s.
+# (a few MB gzipped). Large objects can time out on slow links after ~17-20 s.
 r2_object_put_rest() {
   local bucket="$1" key="$2" file="$3" content_type="$4" content_encoding="${5:-}"
   local token account url http_code body_file
@@ -279,12 +291,18 @@ r2_object_put_rest() {
   if [[ -n "$token" && -n "$account" ]] && command -v curl >/dev/null 2>&1; then
     url="https://api.cloudflare.com/client/v4/accounts/${account}/r2/buckets/${bucket}/objects/${key}"
     body_file="$(mktemp)"
+    # The token goes to curl in a mode-600 file, never in argv: any local
+    # account can read argv with `ps` for the whole upload (up to 600 s).
+    local hdr_file
+    hdr_file="$(umask 077 && mktemp)"
+    on_exit_rm "$hdr_file"
+    printf 'Authorization: Bearer %s\n' "$token" > "$hdr_file"
     local curl_args=(
       -sS --http1.1
       -o "$body_file"
       -w "%{http_code}"
       -X PUT
-      -H "Authorization: Bearer ${token}"
+      -H @"${hdr_file}"
       -H "Content-Type: ${content_type}"
       --data-binary @"${file}"
       --max-time 600
@@ -297,6 +315,7 @@ r2_object_put_rest() {
     # `curl || echo 000` would concatenate them into "100000".
     local curl_rc=0
     http_code="$(curl "${curl_args[@]}" "$url" 2>/dev/null)" || curl_rc=$?
+    rm -f "$hdr_file"
     if [[ "$curl_rc" -eq 0 && "$http_code" == "200" ]] \
       && grep -q '"success"[[:space:]]*:[[:space:]]*true' "$body_file" 2>/dev/null; then
       rm -f "$body_file"
@@ -389,15 +408,30 @@ require_cloud_config() {
 
 write_env_var() {
   # write_env_var KEY VALUE   - replaces or appends KEY=VALUE in .env.
-  local key="$1" val="$2"
+  # The value reaches awk through the environment, never through argv, where
+  # any local account can read it with `ps`. awk writes it single-quoted, so
+  # `source .env` reads back the exact bytes, also for & | \ $ ` and quotes.
+  local key="$1" val="$2" tmp
   touch "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  if grep -qE "^${key}=" "$ENV_FILE" 2>/dev/null; then
-    # Use a different sed delimiter so api keys with / don't break it.
-    sed -i.bak "s|^${key}=.*|${key}=${val}|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-  else
-    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
-  fi
+  tmp="$(umask 077 && mktemp)"
+  on_exit_rm "$tmp"
+  TROVE_ENV_KEY="$key" TROVE_ENV_VAL="$val" awk '
+    BEGIN {
+      k = ENVIRON["TROVE_ENV_KEY"]; v = ENVIRON["TROVE_ENV_VAL"]
+      # Single-quote v for the shell: each quote becomes quote-backslash-quote-quote.
+      # split and join, not gsub: gsub replacement escapes differ between awks.
+      n = split(v, part, "\047"); q = part[1]
+      for (i = 2; i <= n; i++) q = q "\047\\\047\047" part[i]
+      line = k "=\047" q "\047"; done = 0
+    }
+    index($0, k "=") == 1 { if (!done) print line; done = 1; next }
+    { print }
+    END { if (!done) print line }
+  ' "$ENV_FILE" > "$tmp"
+  # cat keeps the inode, the mode, and a symlinked .env in place.
+  cat "$tmp" > "$ENV_FILE"
+  rm -f "$tmp"
 }
 
 cmd_set_key() {
@@ -486,6 +520,21 @@ cmd_set_key() {
   echo "  to remove any: open .env in any editor, or just delete the file."
 }
 
+# Per-user bearer token for wiki_server.py. Any local account can reach a
+# loopback port; the token keeps the keys and data for this user. Only
+# wiki_server.py gets it, never as an export and never as a VITE_* variable:
+# `vite dev` inlines VITE_* values into the modules it serves on loopback.
+WIKI_TOKEN_FILE="$ROOT/.wiki_token"
+ensure_wiki_token() {
+  if [[ ! -s "$WIKI_TOKEN_FILE" ]]; then
+    ( umask 077 && "$SYS_PY" -c 'import secrets; print(secrets.token_urlsafe(32))' > "$WIKI_TOKEN_FILE" )
+    echo "▸ created the local server token in .wiki_token"
+    echo "  Paste it once in the web app under Settings → Local server token."
+    echo "  To copy it on macOS: pbcopy < .wiki_token"
+  fi
+  chmod 600 "$WIKI_TOKEN_FILE"
+}
+
 cmd_start() {
   if ! is_listening "$WEB_PORT"; then
     echo "▸ booting webapp (port $WEB_PORT)…"
@@ -496,8 +545,10 @@ cmd_start() {
 
   if ! is_listening "$WIKI_PORT"; then
     if [[ -d "$ROOT/wiki" ]]; then
+      ensure_wiki_token
       echo "▸ booting wiki server (port $WIKI_PORT)…"
-      ( cd "$ROOT" && nohup "$PY" wiki_server.py --port "$WIKI_PORT" > "$LOG_DIR/wiki.log" 2>&1 & )
+      ( cd "$ROOT" && TROVE_WIKI_TOKEN="$(cat "$WIKI_TOKEN_FILE")" \
+          nohup "$PY" wiki_server.py --port "$WIKI_PORT" > "$LOG_DIR/wiki.log" 2>&1 & )
     fi
   else
     echo "✓ wiki already up on $WIKI_PORT"
@@ -572,8 +623,9 @@ cmd_wiki() {
     return 0
   fi
   ensure_python_deps
+  ensure_wiki_token
   echo "▸ wiki server on http://127.0.0.1:$WIKI_PORT"
-  cd "$ROOT" && exec "$PY" wiki_server.py --port "$WIKI_PORT"
+  cd "$ROOT" && TROVE_WIKI_TOKEN="$(cat "$WIKI_TOKEN_FILE")" exec "$PY" wiki_server.py --port "$WIKI_PORT"
 }
 
 cmd_stop() {
@@ -747,7 +799,7 @@ cmd_mcp_push() {
   local d1_name="$TROVE_D1_DB"
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap "rm -rf '$tmpdir'" EXIT
+  on_exit_rm "$tmpdir"
   local existing="$tmpdir/existing.json"
   local sql="$tmpdir/mcp_d1.sql"
   local summary="$tmpdir/summary.json"
@@ -901,12 +953,9 @@ cmd_deploy() {
   tmpdir="$(mktemp -d)"
   # Clean up the compressed temp files on ANY exit - under `set -euo pipefail`
   # a failed wrangler upload aborts the script before reaching a trailing rm.
-  # Double-quote the trap so $tmpdir is expanded NOW (while it's in scope) and
-  # the literal path is baked in: the EXIT trap fires at top-level script exit,
-  # long after this function's `local tmpdir` has gone out of scope, so deferred
-  # expansion (single quotes) would hit `set -u` and throw "tmpdir: unbound
-  # variable". mktemp -d paths never contain quotes/spaces, so this is safe.
-  trap "rm -rf '$tmpdir'" EXIT
+  # The shared EXIT trap gets the literal path now, so a later trap cannot
+  # replace it and `set -u` cannot hit an out-of-scope `local`.
+  on_exit_rm "$tmpdir"
   local cat_gz="$tmpdir/categorized_tweets.json.gz"
   local enr_gz="$tmpdir/enriched_tweets.json.gz"
   echo "▸ pre-compressing JSONs (gzip -9)…"
@@ -938,7 +987,7 @@ cmd_deploy() {
   fi
 
   # Upload LARGE first (enriched), then categorized. enriched is the most
-  # failure-prone (~37 MB gzipped). If it fails, we abort before categorized
+  # failure-prone (tens of MB gzipped). If it fails, we abort before categorized
   # so a partial push never leaves cloud with a newer tweet corpus than its
   # enrichments. Prefer S3 multipart (R2_S3_*) for large objects; small-file
   # path uses curl HTTP/1.1 + retry.
@@ -970,8 +1019,8 @@ cmd_deploy() {
     return 1
   fi
   # 4. Verify what the cloud actually SERVES, not just what we uploaded.
-  #    Upload success is not serve success: the 2026-07 outage was a proxy
-  #    encoding bug that every upload-side check missed. verify_cloud_data.py
+  #    Upload success is not serve success: a proxy encoding bug once passed
+  #    every upload-side check. verify_cloud_data.py
   #    reads the data back (S3 readback always; origin round-trip through the
   #    live /api/data proxy when a CF Access service token is in .env) and
   #    compares tweet count + newest-tweet date against the local file.
@@ -999,18 +1048,22 @@ cmd_deploy() {
   fi
 }
 
-case "${1:-start}" in
-  go)      shift; cmd_go "$@" ;;
-  start)   cmd_start ;;
-  update)  shift; cmd_update "$@" ;;
-  deploy)  shift; cmd_deploy "$@" ;;
-  mcp-push) shift; cmd_mcp_push "$@" ;;
-  set-key) cmd_set_key ;;
-  wiki)    cmd_wiki ;;
-  stop)    cmd_stop ;;
-  status)  cmd_status ;;
-  -h|--help|help)
-    sed -n '2,/^$/p' "$0" | sed '$d' ;;
-  *)
-    echo "unknown command: $1"; exit 1 ;;
-esac
+# Run a command only when executed. tests/test_trove_secrets.sh sources a
+# copy of this file to call single functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "${1:-start}" in
+    go)      shift; cmd_go "$@" ;;
+    start)   cmd_start ;;
+    update)  shift; cmd_update "$@" ;;
+    deploy)  shift; cmd_deploy "$@" ;;
+    mcp-push) shift; cmd_mcp_push "$@" ;;
+    set-key) cmd_set_key ;;
+    wiki)    cmd_wiki ;;
+    stop)    cmd_stop ;;
+    status)  cmd_status ;;
+    -h|--help|help)
+      sed -n '2,/^$/p' "$0" | sed '$d' ;;
+    *)
+      echo "unknown command: $1"; exit 1 ;;
+  esac
+fi

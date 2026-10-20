@@ -14,6 +14,7 @@ import { useUiStore, type EnrichedImport } from '../state/uiStore';
 import { PROXY_MODE, pingDeepseek } from '../chat/client';
 import { pingVoyage } from '../chat/voyage';
 import { makeWikiClient } from '../chat/wikiClient';
+import { localServerHeaders } from '../lib/localServerAuth';
 import { McpSection } from '../components/McpSection';
 
 export function SettingsRoute() {
@@ -32,12 +33,14 @@ export function SettingsRoute() {
   const embedModel = useChatStore((s) => s.embedModel);
   const acknowledgedKeyRisk = useChatStore((s) => s.acknowledgedKeyRisk);
   const wikiServerUrl = useChatStore((s) => s.wikiServerUrl);
+  const wikiToken = useChatStore((s) => s.wikiToken);
   const setDeepseekApiKey = useChatStore((s) => s.setDeepseekApiKey);
   const setVoyageApiKey = useChatStore((s) => s.setVoyageApiKey);
   const setChatModel = useChatStore((s) => s.setChatModel);
   const setEmbedModel = useChatStore((s) => s.setEmbedModel);
   const setAcknowledgedKeyRisk = useChatStore((s) => s.setAcknowledgedKeyRisk);
   const setWikiServerUrl = useChatStore((s) => s.setWikiServerUrl);
+  const setWikiToken = useChatStore((s) => s.setWikiToken);
   const clearKeys = useChatStore((s) => s.clearKeys);
 
   // Local edit buffers for the API keys so the user can type without each
@@ -45,6 +48,7 @@ export function SettingsRoute() {
   const [deepseekDraft, setDeepseekDraft] = useState('');
   const [voyageDraft, setVoyageDraft] = useState('');
   const [wikiDraft, setWikiDraft] = useState(wikiServerUrl);
+  const [tokenDraft, setTokenDraft] = useState('');
   const [modelDraft, setModelDraft] = useState(chatModel);
   const [pingResult, setPingResult] = useState<{
     deepseek?: { ok: boolean; message: string };
@@ -74,9 +78,13 @@ export function SettingsRoute() {
     setEnvKeyMsg(null);
     try {
       const base = wikiServerUrl.replace(/\/$/, '');
-      const r = await fetch(`${base}/api/keys/load`);
+      const r = await fetch(`${base}/api/keys/load`, { headers: localServerHeaders() });
+      if (r.status === 401) {
+        setEnvKeyMsg('✗ The wiki server needs the local server token. Paste it under Wiki server below.');
+        return;
+      }
       if (!r.ok) throw new Error(`HTTP ${r.status} from wiki server`);
-      const keys: { deepseek?: string; voyage?: string; openrouter?: string } = await r.json();
+      const keys: { deepseek?: string; voyage?: string } = await r.json();
       const loaded: string[] = [];
       const missing: string[] = [];
       if (keys.deepseek) {
@@ -221,6 +229,12 @@ export function SettingsRoute() {
     setPingResult((r) => ({ ...r, wiki: undefined }));
     markSaved('wiki');
   };
+  const saveToken = () => {
+    setWikiToken(tokenDraft);
+    setTokenDraft('');
+    setPingResult((r) => ({ ...r, wiki: undefined }));
+    markSaved('token');
+  };
   const testWiki = async () => {
     if (testing.wiki) return;
     setTesting((t) => ({ ...t, wiki: true }));
@@ -230,12 +244,24 @@ export function SettingsRoute() {
       const r = await client.health();
       if ('error' in r) {
         setPingResult((s) => ({ ...s, wiki: { ok: false, message: r.error } }));
-      } else {
-        setPingResult((s) => ({
-          ...s,
-          wiki: { ok: true, message: `OK - ${r.page_count} pages (${r.status})` },
-        }));
+        return;
       }
+      // /health is open; a token-gated route shows whether the token works.
+      let tokenOk = false;
+      try {
+        const auth = await fetch(`${wikiDraft.replace(/\/$/, '')}/api/keys/status`, {
+          headers: localServerHeaders(),
+        });
+        tokenOk = auth.ok;
+      } catch {
+        tokenOk = false;
+      }
+      setPingResult((s) => ({
+        ...s,
+        wiki: tokenOk
+          ? { ok: true, message: `OK - ${r.page_count} pages (${r.status}), token accepted` }
+          : { ok: false, message: `Server is up (${r.page_count} pages), but the token is missing or wrong` },
+      }));
     } finally {
       setTesting((t) => ({ ...t, wiki: false }));
     }
@@ -486,8 +512,9 @@ export function SettingsRoute() {
       <section className="card space-y-3 p-5">
         <h2 className="text-lg font-semibold">Wiki server (optional)</h2>
         <p className="text-sm text-ink-500 dark:text-ink-300">
-          The local Flask wiki server (run <code>python wiki_server.py</code>) lets the chat
-          agent look up named-entity briefs. Leave it off if you haven't bootstrapped the
+          The local Flask wiki server (run <code>./trove start</code>) lets the chat
+          agent look up named-entity briefs. It also serves the data sync and the
+          Load keys button. Leave it off if you haven't bootstrapped the
           wiki yet - the agent gracefully degrades to SQL-only mode.
         </p>
         <div className="flex flex-wrap items-center gap-2">
@@ -512,6 +539,34 @@ export function SettingsRoute() {
             Test
           </button>
         </div>
+        {!PROXY_MODE && (
+          <div className="space-y-2">
+            <label className="label" htmlFor="wiki-token">
+              Local server token {wikiToken ? `(saved: ${maskKey(wikiToken)})` : '(not set)'}
+            </label>
+            <p className="text-xs text-ink-500 dark:text-ink-300">
+              <code>./trove start</code> writes a private token to <code>.wiki_token</code> in the
+              repo folder. Paste it here once. On macOS, <code>pbcopy &lt; .wiki_token</code> copies it.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                id="wiki-token"
+                type="password"
+                autoComplete="off"
+                className="input min-w-0 flex-1 font-mono"
+                placeholder="Paste the contents of .wiki_token"
+                value={tokenDraft}
+                onChange={(e) => setTokenDraft(e.target.value)}
+              />
+              <button type="button" className="btn-outline" onClick={saveToken} disabled={!tokenDraft.trim()}>
+                Save
+              </button>
+              {savedFlash === 'token' && (
+                <span className="self-center text-xs text-emerald-600 dark:text-emerald-400">Saved ✓</span>
+              )}
+            </div>
+          </div>
+        )}
         {pingResult.wiki && (
           <div
             className={`text-xs ${

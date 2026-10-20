@@ -34,5 +34,22 @@ Out of scope:
 - **Loopback-only local server.** `wiki_server.py` binds to `127.0.0.1` by default. It rejects any request whose `Host` header is not a loopback name. This blocks DNS rebinding. Its CORS list holds only local ports.
 - **SSRF guard.** `enrich.py` checks each URL and each redirect hop. It blocks private, loopback, link-local, and other non-public addresses. It also limits redirects and body size.
 - **Content-Security-Policy.** `webapp/public/_headers` sets a strict policy: no inline scripts, `connect-src 'self'`, no framing, and images only from the same origin and `*.twimg.com`.
-- **Secrets stay out of git.** `.env`, `webapp/wrangler.toml`, `exports/`, data files, caches, and `wiki/` are in `.gitignore`.
-- **Local keys.** The endpoint `/api/keys/load` on the local server returns your keys as plain text, to loopback requests only. Do not expose that server to a network.
+  In local mode, a meta tag in `webapp/index.html` sets the same policy.
+  Its `connect-src` also allows the local server and the DeepSeek and Voyage APIs.
+- **No remote images in chat.** The chat never renders an image from a model answer.
+  A prompt-injected post cannot make the browser fetch an attacker URL.
+- **Self-hosted fonts.** The app bundles its fonts.
+  No page load contacts a font CDN.
+- **Secrets stay out of git.** `.env`, `.wiki_token`, `webapp/wrangler.toml`, `exports/`, data files, caches, and `wiki/` are in `.gitignore`.
+- **Local keys.** The endpoint `/api/keys/load` on the local server returns the DeepSeek and Voyage keys as plain text.
+  It accepts loopback requests only.
+- **Local server token.** Any local account can reach a loopback port.
+  So `wiki_server.py` requires a bearer token on every route except `/health`.
+  It compares the token in constant time.
+  `./trove start` writes a random token to `.wiki_token` with mode 600.
+  Only `wiki_server.py` gets it from the launcher.
+  You paste it once in Settings.
+  The token is never a `VITE_` variable, because the dev server serves those values to any local account.
+  Do not expose the local server to a network.
+- **Launcher secrets.** `./trove` passes the Cloudflare token to `curl` in a mode-600 file and passes key values to `awk` in the environment.
+  No secret appears in a process argument list.

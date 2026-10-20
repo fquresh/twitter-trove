@@ -188,8 +188,13 @@ Every imported post is treated as one kind of saved post, whatever page it came 
 - The app calls outside services only when you use a feature.
 - Never delete the cache files. A deleted cache forces a paid rerun.
 - The dev server uses port 5174.
-- `wiki_server.py` returns plaintext keys at `/api/keys/load`.
+- `wiki_server.py` returns the DeepSeek and Voyage keys as plain text at `/api/keys/load`.
   It accepts only loopback `Host` headers, and its CORS list holds only local ports.
+  Every route except `/health` needs the bearer token from `.wiki_token`.
+- The app self-hosts its fonts.
+  No page load contacts a font CDN.
+- `webapp/index.html` holds a CSP meta tag for local mode.
+  It mirrors `webapp/public/_headers`.
 
 ## Privacy
 

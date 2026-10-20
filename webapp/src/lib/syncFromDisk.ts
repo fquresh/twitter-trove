@@ -23,6 +23,7 @@ import { importEnrichedData } from '../db/queries/enrichments';
 import { getSyncState, setSyncState } from '../db/queries/outbox';
 import { streamImportEmbeddings } from './streamingEmbeddingsImport';
 import type { EnrichedImport } from '../state/uiStore';
+import { localServerHeaders } from './localServerAuth';
 
 /** True in the deployed cloud build (`VITE_USE_API_PROXY=true`). Exported so the
  *  UI can decide cloud-only behaviors (e.g. first-load auto-sync, skipping the
@@ -33,7 +34,7 @@ const DEFAULT_LOCAL_BASE = 'http://localhost:8765';
 const ENRICHED_FILE = 'enriched_tweets.json';
 
 /**
- * Decide whether to skip the FULL enriched_tweets.json payload (~40 MB) on
+ * Decide whether to skip the FULL enriched_tweets.json payload (tens of MB) on
  * this device. The full file includes embeddings + url/image enrichments, and
  * on iOS Safari JSON.parse of it OOMs the tab uncatchably. When this returns
  * true, the caller should still try the streaming embeddings.ndjson path
@@ -119,9 +120,20 @@ export function fetchCredentials(): RequestCredentials {
   return PROXY_MODE ? 'include' : 'omit';
 }
 
+/** Options for each data request. The local server needs the per-user bearer
+ *  token; the cloud proxy authenticates with the Access cookie instead. */
+function dataRequestInit(extra: RequestInit = {}): RequestInit {
+  return { ...extra, credentials: fetchCredentials(), headers: PROXY_MODE ? {} : localServerHeaders() };
+}
+
 export async function fetchManifest(base = DEFAULT_LOCAL_BASE): Promise<DataManifest> {
   const url = manifestUrl(base);
-  const resp = await fetch(url, { credentials: fetchCredentials() });
+  const resp = await fetch(url, dataRequestInit());
+  if (!PROXY_MODE && resp.status === 401) {
+    throw new Error(
+      `The wiki server at ${base} needs the local server token. Paste the contents of .wiki_token in Settings.`,
+    );
+  }
   if (!resp.ok) {
     const where = PROXY_MODE ? 'the deployed /api/manifest endpoint' : `wiki server at ${base}`;
     throw new Error(`Couldn't reach ${where} (HTTP ${resp.status}).`);
@@ -136,7 +148,7 @@ interface SyncOpts {
    *  embeddings import) so a memory-constrained device keeps the tweets even if
    *  a later step fails. */
   onCheckpoint?: () => Promise<void>;
-  /** Skip fetching the FULL `enriched_tweets.json` (its ~40 MB monolithic
+  /** Skip fetching the FULL `enriched_tweets.json` (its tens-of-MB monolithic
    *  JSON.parse OOMs constrained mobile devices). When true, the caller should
    *  also set `fetchEmbeddingsOnly` to control whether the streaming NDJSON
    *  artifact is fetched instead. The ETag token is left unset so enabling
@@ -191,7 +203,7 @@ export async function syncFromDisk(handle: SqliteHandle, opts: SyncOpts = {}): P
     const f = manifest.html_files[i];
     progress(`Fetching ${f.name} (${i + 1}/${manifest.html_files.length})…`);
     try {
-      const r = await fetch(htmlFileUrl(f.name, base));
+      const r = await fetch(htmlFileUrl(f.name, base), dataRequestInit());
       if (!r.ok) {
         summary.errors.push(`${f.name}: HTTP ${r.status}`);
         continue;
@@ -234,7 +246,7 @@ export async function syncFromDisk(handle: SqliteHandle, opts: SyncOpts = {}): P
     // Skip the download+parse entirely when the file is byte-identical to what
     // we last imported. The version token is the R2 ETag (cloud) or mtime:size
     // (local). Stored in sync_state, so it lives in the DB snapshot and resets
-    // with the DB - avoids re-fetching + re-parsing the ~56 MB embeddings file
+    // with the DB - avoids re-fetching + re-parsing the large embeddings file
     // on every ⟳ when nothing changed (the dominant cost, esp. on mobile).
     const token = entry.etag ?? `${entry.mtime}:${entry.size}`;
     const tokenKey = `import_etag:${name}`;
@@ -248,10 +260,10 @@ export async function syncFromDisk(handle: SqliteHandle, opts: SyncOpts = {}): P
     try {
       // cache: 'no-store' - the app's own token check above is the caching
       // layer (we only get here when the manifest says the file CHANGED), so
-      // the browser HTTP cache can only hurt: a cached 0-byte 200 from the
-      // July 2026 proxy bug kept re-serving itself via If-None-Match/304
+      // the browser HTTP cache can only hurt: a cached 0-byte 200 from an
+      // earlier proxy bug kept re-serving itself via If-None-Match/304
       // revalidation even after the server was fixed.
-      const r = await fetch(dataFileUrl(name, base), { credentials: fetchCredentials(), cache: 'no-store' });
+      const r = await fetch(dataFileUrl(name, base), dataRequestInit({ cache: 'no-store' }));
       console.info(`[sync] ${name}: HTTP ${r.status} (${r.headers.get('content-length') ?? '?'} bytes)`);
       if (!r.ok) {
         summary.errors.push(`${name}: HTTP ${r.status}`);
@@ -340,10 +352,7 @@ export async function syncFromDisk(handle: SqliteHandle, opts: SyncOpts = {}): P
       } else {
         progress(`Fetching ${ndjsonName} (streaming)…`);
         try {
-          const r = await fetch(dataFileUrl(ndjsonName, base), {
-            credentials: fetchCredentials(),
-            cache: 'no-store',
-          });
+          const r = await fetch(dataFileUrl(ndjsonName, base), dataRequestInit({ cache: 'no-store' }));
           console.info(`[sync] ${ndjsonName}: HTTP ${r.status} (${r.headers.get('content-length') ?? '?'} bytes)`);
           if (!r.ok) {
             summary.errors.push(`${ndjsonName}: HTTP ${r.status}`);

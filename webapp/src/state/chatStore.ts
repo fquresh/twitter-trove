@@ -27,6 +27,8 @@ export interface ChatStoreState {
   acknowledgedKeyRisk: boolean;
   /** Wiki server URL for Phase 13 wiki tools. */
   wikiServerUrl: string;
+  /** Bearer token for wiki_server.py, pasted from .wiki_token. Local mode only. */
+  wikiToken: string;
 
   setDeepseekApiKey(v: string): void;
   setVoyageApiKey(v: string): void;
@@ -34,6 +36,7 @@ export interface ChatStoreState {
   setEmbedModel(v: string): void;
   setAcknowledgedKeyRisk(v: boolean): void;
   setWikiServerUrl(v: string): void;
+  setWikiToken(v: string): void;
   clearKeys(): void;
 }
 
@@ -48,6 +51,7 @@ export const useChatStore = create<ChatStoreState>()(
       embedModel: 'voyage-3-large',
       acknowledgedKeyRisk: false,
       wikiServerUrl: 'http://localhost:8765',
+      wikiToken: '',
 
       setDeepseekApiKey: (v) => set({ deepseekApiKey: v.trim() }),
       setVoyageApiKey: (v) => set({ voyageApiKey: v.trim() }),
@@ -55,6 +59,7 @@ export const useChatStore = create<ChatStoreState>()(
       setEmbedModel: (v) => set({ embedModel: v }),
       setAcknowledgedKeyRisk: (v) => set({ acknowledgedKeyRisk: v }),
       setWikiServerUrl: (v) => set({ wikiServerUrl: v.trim() }),
+      setWikiToken: (v) => set({ wikiToken: v.trim() }),
       clearKeys: () => set({ deepseekApiKey: '', voyageApiKey: '' }),
     }),
     {
@@ -102,6 +107,7 @@ export const useChatStore = create<ChatStoreState>()(
         embedModel: s.embedModel,
         acknowledgedKeyRisk: s.acknowledgedKeyRisk,
         wikiServerUrl: s.wikiServerUrl,
+        wikiToken: s.wikiToken,
       }),
     },
   ),

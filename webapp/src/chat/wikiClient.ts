@@ -1,6 +1,9 @@
 // Local wiki server client. Used by the chat agent's wiki tools and by the
 // in-app drawer. Always returns {error: 'wiki_unreachable'} on network
 // failure rather than throwing - graceful degrade per plan §risk register #12.
+// Every route except /health needs the local server token (localServerAuth.ts).
+
+import { localServerHeaders } from '../lib/localServerAuth';
 
 export interface WikiClient {
   health(): Promise<{ status: string; page_count: number; last_log_entry?: string } | { error: 'wiki_unreachable' }>;
@@ -27,9 +30,10 @@ function isHttpError(v: unknown, status: number): boolean {
 
 export function makeWikiClient(serverUrl: string): WikiClient {
   const base = serverUrl.replace(/\/$/, '');
-  const fetchJson = async (path: string, init?: RequestInit): Promise<unknown> => {
+  const fetchJson = async (path: string, auth = true): Promise<unknown> => {
     try {
-      const resp = await fetch(`${base}${path}`, init);
+      // Read the token per request, so a token saved mid-session works at once.
+      const resp = await fetch(`${base}${path}`, auth ? { headers: localServerHeaders() } : undefined);
       if (!resp.ok) {
         return { error: `wiki_http_${resp.status}` };
       }
@@ -41,7 +45,7 @@ export function makeWikiClient(serverUrl: string): WikiClient {
 
   return {
     async health() {
-      return fetchJson('/health') as ReturnType<WikiClient['health']>;
+      return fetchJson('/health', false) as ReturnType<WikiClient['health']>;
     },
     async list({ category, query }) {
       const sp = new URLSearchParams();

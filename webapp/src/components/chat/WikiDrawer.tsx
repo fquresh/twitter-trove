@@ -3,6 +3,7 @@
 // a link to the README's "How to start the wiki server" section.
 
 import { useEffect, useState } from 'react';
+import { localServerHeaders } from '../../lib/localServerAuth';
 
 interface Props {
   path: string;
@@ -26,7 +27,7 @@ export function WikiDrawer({ path, serverUrl, onClose }: Props) {
     (async () => {
       try {
         const url = `${serverUrl.replace(/\/$/, '')}/wiki/read?path=${encodeURIComponent(path)}`;
-        const resp = await fetch(url);
+        const resp = await fetch(url, { headers: localServerHeaders() });
         if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
         const json = (await resp.json()) as WikiResp;
         if (!cancelled) setData(json);

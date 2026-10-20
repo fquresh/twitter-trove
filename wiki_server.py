@@ -2,6 +2,11 @@
 
 Endpoints (CORS-enabled so the v2 webapp running on :5174 can hit it):
 
+Every route except /health requires `Authorization: Bearer <token>`. The
+token is per user: ./trove writes it to the mode-600 file .wiki_token and
+passes it in TROVE_WIKI_TOKEN. Any local account can reach a loopback port,
+so the token is what keeps the keys, data, and wiki pages for this user.
+
 - GET /health
     -> {"status": "ok", "page_count": N, "last_log_entry": "<line or null>"}
 
@@ -34,6 +39,8 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -57,6 +64,35 @@ CATEGORIES = {"people", "concepts", "tickers"}
 # Files the /api/data endpoints are allowed to serve. The webapp uses these to
 # pull the latest pipeline outputs without the user having to drag-drop files.
 DATA_FILES_AT_ROOT = {"categorized_tweets.json", "enriched_tweets.json", "embeddings.ndjson"}
+
+# Routes under these prefixes need the bearer token. /health stays open so the
+# web app can tell "server down" apart from "token missing".
+TOKEN_PREFIXES = ("/api/", "/wiki/")
+WIKI_TOKEN_FILE = ".wiki_token"
+
+
+def _load_wiki_token() -> str:
+    """The token from TROVE_WIKI_TOKEN, else from .wiki_token next to this
+    file (for a server started by hand). Empty means every protected route
+    answers 401."""
+    v = os.environ.get("TROVE_WIKI_TOKEN", "").strip()
+    if v:
+        return v
+    f = ROOT / WIKI_TOKEN_FILE
+    try:
+        return f.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _bearer_ok(auth_header: str, token: str) -> bool:
+    """Constant-time check of an `Authorization: Bearer <token>` header."""
+    if not token:
+        return False
+    scheme, _, value = (auth_header or "").partition(" ")
+    if scheme.lower() != "bearer":
+        return False
+    return secrets.compare_digest(value.strip().encode(), token.encode())
 
 
 def _load_yaml_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -270,17 +306,16 @@ def _is_loopback_host_header(host_header: str) -> bool:
     return _host_only(host_header) in LOOPBACK_HOSTS
 
 
-def create_app() -> Flask:
+def create_app(wiki_token: str | None = None) -> Flask:
+    """`wiki_token` None reads the token from the environment or .wiki_token."""
     app = Flask(__name__)
+    token = (_load_wiki_token() if wiki_token is None else wiki_token).strip()
     # Allowlist localhost origins (where the Vite dev server runs). The
     # /api/keys endpoint exposes secrets; we MUST NOT allow arbitrary
     # cross-origin scripts to read them.
     _ALLOWED_ORIGINS = [
         "http://localhost:5174",
         "http://127.0.0.1:5174",
-        # Legacy port, harmless to leave allowlisted for now
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
     ]
     CORS(app, origins=_ALLOWED_ORIGINS, supports_credentials=False)
 
@@ -290,6 +325,16 @@ def create_app() -> Flask:
         # CORS does not stop it, but its Host header is the attacker's name.
         if not _is_loopback_host_header(request.host):
             return jsonify({"error": "forbidden"}), 403
+        # Per-user token. CORS preflights carry no Authorization header, so
+        # they pass here; the real request that follows must have the token.
+        if (
+            request.method != "OPTIONS"
+            and request.path.startswith(TOKEN_PREFIXES)
+            and not _bearer_ok(request.headers.get("Authorization", ""), token)
+        ):
+            resp = jsonify({"error": "unauthorized"})
+            resp.headers["WWW-Authenticate"] = 'Bearer realm="trove"'
+            return resp, 401
         return None
 
     @app.get("/health")
@@ -352,12 +397,11 @@ def create_app() -> Flask:
         return jsonify(out)
 
     # ── Key sharing ──────────────────────────────────────────────────────
-    # The webapp's chat needs DEEPSEEK + VOYAGE keys (the Python pipeline still
-    # uses OPENROUTER + ANTHROPIC, which are also returned here for completeness).
+    # The webapp's chat needs the DEEPSEEK + VOYAGE keys, and only those are
+    # returned. The pipeline keys (OPENROUTER, ANTHROPIC) never leave .env.
     # They already live in .env (sourced into the env at trove startup). This
     # endpoint hands them to the webapp so the user doesn't have to paste them
-    # again.
-    # CORS is locked to localhost above, so other origins can't read this.
+    # again. The bearer token check above gates it; CORS is locked to localhost.
 
     def _is_local_host() -> bool:
         """True only if the request's Host header is a loopback address. CORS is
@@ -378,7 +422,13 @@ def create_app() -> Flask:
             for line in env_path.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
                 if line.startswith(f"{name}="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+                    raw = line.split("=", 1)[1].strip()
+                    # Shell quoting, as ./trove set-key writes it and `source` reads it.
+                    try:
+                        parts = shlex.split(raw, comments=True)
+                    except ValueError:
+                        return raw.strip('"').strip("'")
+                    return parts[0] if len(parts) == 1 else raw
         return ""
 
     @app.get("/api/keys/status")
@@ -395,15 +445,13 @@ def create_app() -> Flask:
 
     @app.get("/api/keys/load")
     def keys_load():
-        # Actual key values. Gated by BOTH the localhost CORS allowlist (stops a
-        # cross-origin web page) AND a loopback Host check (stops curl / DNS
-        # rebinding, which CORS does not).
+        # Actual key values. Gated by the localhost CORS allowlist (stops a
+        # cross-origin web page), the loopback Host check (stops DNS
+        # rebinding), and the bearer token (stops other local accounts).
         if not _is_local_host():
             return jsonify({"error": "forbidden"}), 403
         return jsonify({
-            "anthropic": _env_key("ANTHROPIC_API_KEY"),
             "voyage": _env_key("VOYAGE_API_KEY"),
-            "openrouter": _env_key("OPENROUTER_API_KEY"),
             "deepseek": _env_key("DEEPSEEK_API_KEY"),
         })
 
@@ -446,7 +494,8 @@ def main() -> None:
         "--allow-non-loopback",
         action="store_true",
         help="Permit a non-loopback --host. The Host check still allows only "
-        "loopback names, so this is rarely useful and exposes the corpus.",
+        "loopback names, so this is rarely useful. A client that sends a "
+        "loopback Host and the token can then read the keys and the corpus.",
     )
     args = parser.parse_args()
 
@@ -467,6 +516,13 @@ def main() -> None:
         sys.exit(1)
 
     app = create_app()
+    if not _load_wiki_token():
+        print(
+            "warning: no TROVE_WIKI_TOKEN and no .wiki_token file. Every route "
+            "except /health answers 401. Start the server with ./trove start.",
+            file=sys.stderr,
+            flush=True,
+        )
     print(
         f"wiki_server listening on http://{args.host}:{args.port} "
         f"(serving {WIKI_ROOT})",

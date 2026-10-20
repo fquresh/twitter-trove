@@ -174,7 +174,9 @@ webapp/
   chat model (free-text - any DeepSeek native model id, defaults to
   `deepseek-v4-flash`), and configure the wiki server URL.  The
   **"Load keys from .env"** button at the top fetches `/api/keys/load` on
-  the wiki server and populates both keys with one click.
+  the wiki server and populates both keys with one click. The wiki server
+  needs the token from `../.wiki_token`; paste it once under
+  **Local server token**.
 - **Chat** - second-brain RAG over the archive. Pre-fetched hybrid
   retrieval (FTS + cosine similarity over int8 Voyage embeddings, fused via
   RRF) gives the agent a context block; the agent can also call 5 SQL tools

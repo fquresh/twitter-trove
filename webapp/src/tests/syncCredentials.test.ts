@@ -1,5 +1,6 @@
 // fetch credentials mode: 'include' only in cloud/proxy mode. The local wiki
 // server does not allow credentialed CORS, so 'include' would break sync there.
+// The local server instead needs the per-user bearer token from Settings.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 afterEach(() => {
@@ -35,6 +36,30 @@ describe('sync fetch credentials', () => {
     expect(mod.fetchCredentials()).toBe('omit');
     expect(calls[0].url).toBe('http://localhost:8765/api/data/manifest');
     expect(calls[0].init?.credentials).toBe('omit');
+  });
+
+  it('local mode sends the local server token as a bearer header', async () => {
+    vi.stubEnv('VITE_USE_API_PROXY', 'false');
+    vi.resetModules();
+    const { useChatStore } = await import('../state/chatStore');
+    useChatStore.getState().setWikiToken('dummy-local-token');
+    const mod = await import('../lib/syncFromDisk');
+    const calls = stubFetch();
+    await mod.fetchManifest('http://localhost:8765');
+    expect(new Headers(calls[0].init?.headers).get('Authorization')).toBe('Bearer dummy-local-token');
+    useChatStore.getState().setWikiToken('');
+  });
+
+  it('proxy mode never sends the local server token', async () => {
+    vi.stubEnv('VITE_USE_API_PROXY', 'true');
+    vi.resetModules();
+    const { useChatStore } = await import('../state/chatStore');
+    useChatStore.getState().setWikiToken('dummy-local-token');
+    const mod = await import('../lib/syncFromDisk');
+    const calls = stubFetch();
+    await mod.fetchManifest();
+    expect(new Headers(calls[0].init?.headers).get('Authorization')).toBeNull();
+    useChatStore.getState().setWikiToken('');
   });
 
   it('proxy mode keeps credentials: include', async () => {

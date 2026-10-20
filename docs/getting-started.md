@@ -106,6 +106,10 @@ Click the sync button (top right) to load the new data.
 Press `Cmd+K` (or `Ctrl+K`) anywhere to open a chat popup.
 In Settings, click "Load keys from .env" to copy your keys into the browser.
 This button works only while `wiki_server.py` runs.
+The local server needs a private token.
+`./trove start` writes it to the file `.wiki_token` the first time.
+Paste that token once in Settings, under Local server token.
+On macOS, `pbcopy < .wiki_token` copies it.
 
 ## Next steps
 
