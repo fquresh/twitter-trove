@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 
 type Theme = 'dark' | 'light';
 
-/** Whether to pull the heavy enriched/embeddings payload (~40 MB, powers chat
+/** Whether to pull the heavy enriched/embeddings payload (tens of MB, powers chat
  *  RAG) onto THIS device when syncing. 'auto' skips it on constrained mobile
  *  devices (see shouldSkipEnriched); 'always'/'never' force the choice. Persisted
  *  per-device, which is correct for a device-capability setting. */

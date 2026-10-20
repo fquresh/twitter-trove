@@ -2,8 +2,8 @@
 """Post-deploy verification: prove the cloud actually SERVES the data we pushed.
 
 Run by ``./trove deploy`` after the R2 upload. Upload success is not serve
-success - the 2026-07 outage was a proxy encoding bug that every upload-side
-check missed. This script verifies two layers:
+success - a proxy encoding bug once passed every upload-side check.
+This script verifies two layers:
 
 1. S3 readback (requires R2_S3_* env): download ``categorized_tweets.json``
    from the bucket, gunzip, parse, and compare ``metadata.total_tweets`` and
@@ -15,7 +15,7 @@ check missed. This script verifies two layers:
    ``/api/data/categorized_tweets.json`` from the deployed site exactly like a
    browser (gzip accepted, transparently decoded) and run the same comparison.
    This is the ONLY layer that exercises the Pages Function proxy - the layer
-   where the 2026-07 bug lived. Skipped with a hint when the token is absent.
+   where the proxy encoding bug lived. Skipped with a hint when the token is absent.
 
 Exit codes: 0 = all performed checks passed, 1 = a check failed, 2 = bad usage.
 """
@@ -146,8 +146,8 @@ def check_origin(origin: str, local: dict) -> list[str]:
     errors = compare_meta("origin categorized_tweets.json", local, doc)
 
     # Browser HTTP-cache revalidation path: a matching If-None-Match must get a
-    # real 304 - never a 0-byte 200 (which poisons the browser cache and broke
-    # every sync after the first in July 2026).
+    # real 304 - never a 0-byte 200 (which poisons the browser cache and
+    # breaks every sync after the first).
     if etag:
         with httpx.Client(timeout=180, follow_redirects=False) as client:
             resp = client.get(url, headers={**headers, "If-None-Match": etag})
@@ -166,7 +166,7 @@ def check_origin(origin: str, local: dict) -> list[str]:
         errors.append("origin categorized_tweets.json: no ETag header on the 200 response")
 
     # The enriched payload goes through the identical proxy code path; confirm
-    # it starts serving without downloading all ~40 MB: stream the first decoded
+    # it starts serving without downloading all of it: stream the first decoded
     # bytes and check they open a JSON document.
     url = f"{origin}/api/data/enriched_tweets.json?cb={int(time.time())}"
     with httpx.Client(timeout=180, follow_redirects=False) as client:

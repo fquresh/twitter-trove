@@ -11,8 +11,8 @@
 //     distinct, which would block re-import idempotency otherwise.
 //
 // Inserts are chunked at CHUNK_SIZE rows per BEGIN/COMMIT to keep sql.js
-// WASM memory steady - the full corpus (26K embeddings + ~10K image desc +
-// few hundred url contents) completes in ~30 transactions, seconds total.
+// WASM memory steady - a full corpus of tens of thousands of embeddings and
+// image descriptions completes in a few dozen transactions, seconds total.
 
 import type { Database } from 'sql.js';
 import { transaction } from '../exec';

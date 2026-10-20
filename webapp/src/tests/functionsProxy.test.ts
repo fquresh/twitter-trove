@@ -3,7 +3,7 @@
 // Integration tests for the Pages Functions behind /api/* - run against the
 // REAL Workers runtime (Miniflare v3 embeds workerd), not mocks.
 //
-// Why this exists: the 2026-07 cloud outage was a runtime-level encoding bug
+// Why this exists: a past cloud outage was a runtime-level encoding bug
 // (`encodeBody` defaulting to 'automatic' double-gzipped the pre-compressed R2
 // objects) that no unit test could see - `syncFromDisk.test.ts` mocks fetch,
 // and the function handlers looked correct when called directly. These tests
@@ -20,7 +20,7 @@ import { generateKeyPair, SignJWT, exportJWK } from 'jose';
 import { MockAgent } from 'undici';
 
 const BUILD_DIR = resolve(__dirname, '../../.wrangler/test-fn-build');
-const FIXTURE = { metadata: { newest: '2026-07-13' }, tweets: [{ id: '1', text: 'repro' }] };
+const FIXTURE = { metadata: { newest: '2026-01-15' }, tweets: [{ id: '1', text: 'repro' }] };
 
 function makeMiniflare(bindings: Record<string, string>, fetchMock?: MockAgent): Miniflare {
   return new Miniflare({
@@ -68,7 +68,7 @@ describe('/api/data/[name] (R2 gzip streaming proxy)', () => {
     // undici decodes Content-Encoding like a browser; with the old
     // encodeBody:'automatic' double-gzip bug this json() call throws.
     const body = (await res.json()) as typeof FIXTURE;
-    expect(body.metadata.newest).toBe('2026-07-13');
+    expect(body.metadata.newest).toBe('2026-01-15');
     expect(body.tweets).toHaveLength(1);
   });
 
@@ -95,7 +95,7 @@ describe('/api/data/[name] (R2 gzip streaming proxy)', () => {
     });
     expect(changed.status).toBe(200);
     const body = (await changed.json()) as typeof FIXTURE;
-    expect(body.metadata.newest).toBe('2026-07-13');
+    expect(body.metadata.newest).toBe('2026-01-15');
   });
 
   it('rejects non-allowlisted names with 404', async () => {

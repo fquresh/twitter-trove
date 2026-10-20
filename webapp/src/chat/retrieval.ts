@@ -81,7 +81,7 @@ export function markRetrievalStale(): void {
  */
 export async function ensureWorkerReady(model: string): Promise<ReadyState> {
   // No-op fast path: the worker already holds the current DB for this model and
-  // nothing was imported since. Skip the ~60 MB export + postMessage that a
+  // nothing was imported since. Skip the tens-of-MB export + postMessage that a
   // ChatRoute/ChatPopup remount would otherwise repeat on every navigation.
   if (initialized && lastModel === model && !staleSinceImport && lastReady) {
     return lastReady;

@@ -41,7 +41,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env, params })
   // Precondition failed (the client's etag matched): R2 returns a METADATA-ONLY
   // object here - truthy, but with no `body`. It must become a real 304, or the
   // fallthrough below streams a 0-byte 200 that overwrites the browser's cached
-  // copy and breaks every sync after the first (the second July 2026 outage).
+  // copy and breaks every sync after the first.
   if (!('body' in object) || !object.body) {
     return new Response(null, {
       status: 304,

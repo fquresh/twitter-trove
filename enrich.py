@@ -825,7 +825,7 @@ async def _describe_one_image(aclient, url: str, model: str) -> dict:
             continue
         except anthropic.BadRequestError as e:
             err = str(e)
-            # Account-level fatal: don't persist 13k poisoned cache entries
+            # Account-level fatal: don't persist thousands of poisoned cache entries
             # and don't keep dialing.  Surface a clear error and stop.
             low = err.lower()
             if "credit balance is too low" in low or "insufficient_quota" in low or "billing" in low:

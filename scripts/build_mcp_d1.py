@@ -2,7 +2,7 @@
 """Build the SQL that loads the MCP index into Cloudflare D1.
 
 The remote MCP server (webapp/functions/api/mcp.ts) answers from
-D1, not from the R2 JSONs, because a Worker cannot parse a 40 MB JSON on
+D1, not from the R2 JSONs, because a Worker cannot parse a tens-of-MB JSON on
 every request. This script turns categorized_tweets.json, enriched_tweets.json
 and the wiki/ folder into one .sql file that `wrangler d1 execute --file`
 ingests. `./trove deploy` runs it after the R2 push.
@@ -10,7 +10,7 @@ ingests. `./trove deploy` runs it after the R2 push.
 Incremental by default: pass --existing <json> (the output of
 `SELECT id, h FROM mcp_tweets` as wrangler --json prints it) and only tweets
 whose content hash changed, plus new and removed ids, are written. D1's free
-tier caps rows written per day, so a daily deploy must not rewrite 37k rows.
+tier caps rows written per day, so a daily deploy must not rewrite every row.
 --full drops and recreates every table.
 
 Usage:

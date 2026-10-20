@@ -78,9 +78,8 @@ CONCURRENCY = 10
 MAX_IMAGES_PER_TWEET = 4  # X photo limit; extras are quote-card media
 
 # ── Canonical Taxonomy ─────────────────────────────────────────────────────
-# Hand-curated based on the actual content distribution observed in the
-# archive. ~70 categories chosen so each meaningfully clusters tweets without
-# fragmenting (the emergent taxonomy hit 4,640 singletons).
+# Hand-curated. ~70 categories chosen so each meaningfully clusters tweets
+# without fragmenting (an emergent taxonomy produces thousands of singletons).
 CANONICAL_TAXONOMY = [
     # ── Trading: Crypto (the heaviest area) ──
     ("Trading > Crypto > Market Analysis",
@@ -557,7 +556,7 @@ def _drop_legacy_bare_id_keys(cache: dict) -> None:
     The legacy cache keyed entries by the bare tweet id. The sig-keyed cache
     makes those orphans unreachable, so we back the whole file up verbatim
     (once, skip if the backup already exists) and drop the bare-id entries
-    from the in-memory dict so future saves don't carry 35k orphans. The
+    from the in-memory dict so future saves don't carry the orphans. The
     backup file is never deleted.
     """
     bare_keys = [k for k in cache if k.isdigit()]

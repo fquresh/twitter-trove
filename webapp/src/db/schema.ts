@@ -274,7 +274,7 @@ export const FTS_TRIGGERS_V5: string[] = [
 ];
 
 // Schema for the SEPARATE embeddings database (embDb). tweet_embeddings is large
-// (~28 MB of int8 vectors) and immutable after import, yet it lived in the main
+// (tens of MB of int8 vectors) and immutable after import, yet it lived in the main
 // DB and got re-serialized on every favorite/notes mutation. We keep it in its
 // own sql.js database, snapshotted to its own IndexedDB key only on import, so
 // the per-mutation snapshot no longer rewrites it. No FK to tweets here (they're

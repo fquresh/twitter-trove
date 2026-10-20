@@ -2,8 +2,8 @@
 """Upload a file to Cloudflare R2 via the S3-compatible API (multipart).
 
 Used by ``./trove deploy`` for large objects (e.g. gzipped
-``enriched_tweets.json`` ~37 MB). Single-shot PUTs die on this network after
-~17-20 s; multipart (~10 MB parts) finishes each part well inside that window
+``enriched_tweets.json``, tens of MB). Single-shot PUTs can time out on slow
+links after ~17-20 s; multipart (~10 MB parts) finishes each part well inside that window
 and retries parts independently.
 
 Env (required):

@@ -26,7 +26,7 @@ const CATEGORIZED = {
       id: '1000000000000000001',
       author: 'Ada Fieldstone',
       handle: '@ada_fieldstone',
-      text: 'Agent memory as files is the next big thing. Context windows are not memory.',
+      text: 'Agent memory belongs in plain folders on disk. A context window forgets; a folder keeps.',
       timestamp: 'Mar 31, 2026',
       urls: [],
       tickers: [],

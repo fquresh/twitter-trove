@@ -12,7 +12,7 @@ import {
 // Two serialized SQLite files live in IndexedDB, in the same store under two keys:
 //   - 'primary'    - the MAIN db (tweets, categories, FTS, chat, sync…). Rewritten
 //                    on the 2 s debounce after every mutation (the hot path).
-//   - 'embeddings' - the embeddings-only db (~28 MB of immutable int8 vectors).
+//   - 'embeddings' - the embeddings-only db (tens of MB of immutable int8 vectors).
 //                    Rewritten ONLY on import, so a favorite/notes mutation no
 //                    longer re-serializes it. (Schema v4 split.)
 

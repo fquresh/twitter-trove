@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Derive an embeddings-only NDJSON artifact from enriched_tweets.json.
 
-The full enriched_tweets.json (~51 MB) OOMs iOS Safari when JSON.parse'd
+The full enriched_tweets.json (tens of MB) OOMs iOS Safari when JSON.parse'd
 monolithically. This script extracts just the embeddings into a
 newline-delimited JSON file that can be streamed line-by-line, keeping
 peak JS heap flat regardless of corpus size.
 
 Format:
-  Line 1: {"_meta":true,"embed_model":"...","embed_dim":1024,"embed_dtype":"int8","count":28850}
+  Line 1: {"_meta":true,"embed_model":"...","embed_dim":1024,"embed_dtype":"int8","count":<N>}
   Line 2+: {"tweet_id":"...","model":"...","dim":1024,"dtype":"int8","scale":...,"offset":...,"vector_b64":"..."}
 
 Usage:

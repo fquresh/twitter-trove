@@ -27,8 +27,8 @@ Usage:
     python wiki_bootstrap.py                  # full pass
 
 By default we use claude-haiku-4-5 - small enough that the validation slice
-costs <$1, and the full pass on this archive (~26k tweets, top 100 of each
-type) lands under ~$3.
+costs <$1, and a full pass on a collection of a few tens of thousands of
+tweets (top 100 of each type) lands under a few dollars.
 """
 
 from __future__ import annotations

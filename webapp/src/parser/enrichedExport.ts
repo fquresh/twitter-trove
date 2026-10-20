@@ -120,7 +120,7 @@ export function parseEnrichedJson(text: string): ParsedEnriched {
 
 // Parse from an already-deserialized object - lets the caller JSON.parse the
 // (large) payload exactly once and route by `isEnrichedObject` without a second
-// 56 MB parse on the main thread.
+// multi-MB parse on the main thread.
 export function parseEnrichedObject(raw: unknown): ParsedEnriched {
   const result: ParsedEnriched = {
     metadata: EMPTY_METADATA,

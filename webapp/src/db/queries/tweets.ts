@@ -170,7 +170,7 @@ export function importClassifierTweets(
     `);
     // Refresh engagement on an existing row, but ONLY when it actually changed -
     // the guard avoids firing the FTS update triggers for every unchanged row on
-    // a no-op re-sync (matters on mobile, ~32k rows). Never touches favorites/notes.
+    // a no-op re-sync (matters on mobile with tens of thousands of rows). Never touches favorites/notes.
     const refresh = db.prepare(`
       UPDATE tweets SET like_count = ?, retweet_count = ?
       WHERE id = ? AND (like_count != ? OR retweet_count != ?)

@@ -1,6 +1,6 @@
 // Streaming importer for the embeddings-only NDJSON artifact.
 //
-// The full enriched_tweets.json (~51 MB) OOMs iOS Safari when JSON.parse'd
+// The full enriched_tweets.json (tens of MB) OOMs iOS Safari when JSON.parse'd
 // monolithically - the tab is jetsamed at peak heap. This module streams the
 // smaller embeddings.ndjson artifact line-by-line from a fetch Response,
 // parses each line individually, and INSERTs into tweet_embeddings in
@@ -8,7 +8,7 @@
 // we hold at most one decoded vector + one transaction buffer at a time.
 //
 // Format (see scripts/build_embeddings_ndjson.py):
-//   Line 1: {"_meta":true,"embed_model":"...","embed_dim":1024,"embed_dtype":"int8","count":28850}
+//   Line 1: {"_meta":true,"embed_model":"...","embed_dim":1024,"embed_dtype":"int8","count":<N>}
 //   Line 2+: {"tweet_id":"...","model":"...","dim":1024,"dtype":"int8","scale":...,"offset":...,"vector_b64":"..."}
 
 import type { Database } from 'sql.js';

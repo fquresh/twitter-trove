@@ -104,11 +104,12 @@ const TABLE = [
   ['https://x.com/search?q=agent%20memory&src=typed_query', 'search', 'search-agent-memory', true],
   ['https://x.com/search?q=%24NVDA+earnings&f=live', 'search', 'search-nvda-earnings', true],
   ['https://x.com/hashtag/AIagents?src=hashtag_click', 'search', 'hashtag-aiagents', true],
-  ['https://x.com/i/lists/1493446837214187523', 'list', 'list-1493446837214187523', true],
-  ['https://x.com/i/communities/1493446837214187523', 'community', 'community-1493446837214187523', true],
-  ['https://x.com/i/topics/898661583827615744', 'topic', 'topic-898661583827615744', true],
-  ['https://x.com/adafieldstone/status/1885026286349910084', 'thread', 'thread-adafieldstone-1885026286349910084', true],
-  ['https://x.com/adafieldstone/status/1885026286349910084/quotes', 'quotes', 'quotes-1885026286349910084', true],
+  // Fictional IDs (1900000000000000001-3), never copied from a real X object.
+  ['https://x.com/i/lists/1900000000000000001', 'list', 'list-1900000000000000001', true],
+  ['https://x.com/i/communities/1900000000000000001', 'community', 'community-1900000000000000001', true],
+  ['https://x.com/i/topics/1900000000000000002', 'topic', 'topic-1900000000000000002', true],
+  ['https://x.com/adafieldstone/status/1900000000000000003', 'thread', 'thread-adafieldstone-1900000000000000003', true],
+  ['https://x.com/adafieldstone/status/1900000000000000003/quotes', 'quotes', 'quotes-1900000000000000003', true],
   ['https://x.com/explore', 'explore', 'explore', true],
   ['https://x.com/explore/tabs/for-you', 'explore', 'explore', true],
   ['https://x.com/notifications', 'notifications', 'notifications', true],
@@ -116,8 +117,8 @@ const TABLE = [
   // Pages that exist but list accounts or nothing collectable.
   ['https://x.com/adafieldstone/followers', 'unsupported', 'unsupported', false],
   ['https://x.com/adafieldstone/following', 'unsupported', 'unsupported', false],
-  ['https://x.com/adafieldstone/status/188502628/likes', 'unsupported', 'unsupported', false],
-  ['https://x.com/adafieldstone/status/188502628/retweets', 'unsupported', 'unsupported', false],
+  ['https://x.com/adafieldstone/status/1900000000000000003/likes', 'unsupported', 'unsupported', false],
+  ['https://x.com/adafieldstone/status/1900000000000000003/retweets', 'unsupported', 'unsupported', false],
   ['https://x.com/messages/12345', 'unsupported', 'unsupported', false],
   ['https://x.com/settings/account', 'unsupported', 'unsupported', false],
   ['https://x.com/i/premium_sign_up', 'unsupported', 'unsupported', false],
@@ -156,11 +157,11 @@ console.log('buildReportHtml');
 const tweets = [
   {
     id: '1000000000000000001',
-    username: 'Andrej 🔥',
+    username: 'Ada 🔥',
     handle: 'adafieldstone',
     // Both of these would break a naive embedder: "];" ends the JSON array in
     // the readers' regex, and "</script>" ends the block in the browser.
-    text: 'memory is files; arr[0]; done ]; and </script> too <!--<script> 📈',
+    text: 'notes go in folders; arr[0]; done ]; and </script> too <!--<script> 📈',
     link: 'https://x.com/adafieldstone/status/1000000000000000001',
     timestamp: '2026-03-31T12:00:00.000Z',
     date: 'Mar 31, 2026',
